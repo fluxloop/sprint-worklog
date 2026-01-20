@@ -9,8 +9,17 @@ A beautiful Electron app to view your Jira sprint worklogs.
 - 🔐 **Atlassian OAuth 2.0** - Secure authentication with your Atlassian account
 - 📊 **Visual Grid** - See your logged hours across tasks and days
 - 📈 **Statistics** - Total hours, average per day, and task count
+- 🎯 **Story Points** - View story point estimates per issue
+- 🔁 **Status Updates** - Change issue status directly from the grid
+- ✏️ **Editable Worklogs** - Adjust previous worklog hours
 - 🌙 **Dark Theme** - Easy on the eyes
 - 🔄 **Real-time Refresh** - Fetch latest data with one click
+
+## Prerequisites
+
+- Node.js 18+ and npm
+- A Jira Cloud site with Jira Software
+- A board ID you have access to
 
 ## Setup
 
@@ -55,6 +64,27 @@ npm start
 ### 5. Sign In
 
 Click "Sign in with Atlassian" and authorize the app.
+
+## Usage
+
+- **Story points**: The far right column shows the story point estimate per issue (when your Jira field is available).
+- **Update status**: Click the status pill in a row to choose a new workflow status.
+- **Edit worklogs**: Click any day cell to add, edit, or clear hours (including past days in the sprint).
+
+## Optional Environment Variables
+
+You can provide OAuth credentials via environment variables instead of the UI:
+
+- `ATLASSIAN_CLIENT_ID`
+- `ATLASSIAN_CLIENT_SECRET`
+
+The board ID is still set via the Settings UI.
+
+## Troubleshooting
+
+- **401 scope does not match**: Ensure the scopes above are set on the OAuth app, then sign out and sign in again.
+- **No active sprint found**: Confirm the board ID and that there is an active sprint on that board.
+- **Missing story points**: Your Jira instance should have a story point field such as "Story point estimate".
 
 ## Development
 

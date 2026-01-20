@@ -1,0 +1,19 @@
+{
+  "name": "sprint-timesheet",
+  "version": "1.0.0",
+  "description": "Beautiful sprint timesheet viewer with Atlassian integration",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "NODE_ENV=development electron ."
+  },
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^28.0.0"
+  },
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "node-fetch": "^2.7.0"
+  }
+}

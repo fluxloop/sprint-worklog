@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
+  <title>Sprint Timesheet</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Titlebar -->
+    <header class="titlebar">
+      <div class="titlebar-drag">
+        <div class="app-title">
+          <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="16" y1="2" x2="16" y2="6"></line>
+            <line x1="8" y1="2" x2="8" y2="6"></line>
+            <line x1="3" y1="10" x2="21" y2="10"></line>
+          </svg>
+          <span>Sprint Timesheet</span>
+        </div>
+      </div>
+      <div class="titlebar-actions">
+        <button id="settingsBtn" class="icon-btn" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3"></circle>
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+          </svg>
+        </button>
+        <div id="userInfo" class="user-info hidden">
+          <span id="userName"></span>
+          <button id="refreshBtn" class="btn-secondary btn-small">
+            <svg class="refresh-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="23 4 23 10 17 10"></polyline>
+              <polyline points="1 20 1 14 7 14"></polyline>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+            </svg>
+            <span class="refresh-text">Refresh</span>
+          </button>
+          <button id="logoutBtn" class="btn-secondary btn-small">Logout</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Login View -->
+      <div id="loginView" class="view login-view">
+        <div class="login-card">
+          <div class="login-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
+            </svg>
+          </div>
+          <h1>Sprint Timesheet</h1>
+          <p class="login-subtitle">Connect your Atlassian account to view your sprint worklogs</p>
+          <button id="loginBtn" class="btn-primary btn-large">
+            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
+              <path d="M11.571 5.143c0 2.286-.857 3.714-2.571 4.286l4.286 9.428h-3.429L5.57 9.43H4.286v9.428H1.143V5.143h5.143c3.143 0 5.285 1.143 5.285 4v.143zm-7.285 3h1.857c1.429 0 2.143-.714 2.143-2 0-1.143-.714-1.857-2.143-1.857H4.286v3.857zM23.43 18.857h-3.143v-6c0-1.714-.572-2.571-1.715-2.571-1.428 0-2.143 1.143-2.143 2.857v5.714h-3.143V7.714h3.143v1.715c.572-1.143 1.714-2 3.429-2 2.285 0 3.571 1.428 3.571 4.285v7.143z"/>
+            </svg>
+            Sign in with Atlassian
+          </button>
+          <p class="login-note">First time? Configure your OAuth app in Settings</p>
+        </div>
+      </div>
+
+      <!-- Dashboard View -->
+      <div id="dashboardView" class="view dashboard-view hidden">
+
+        <div id="fetchProgress" class="fetch-progress hidden">
+          <div class="fetch-progress-bar"></div>
+        </div>
+                 
+        <div class="dashboard-header">
+          <div class="sprint-info">
+            <h2 id="sprintName">Loading...</h2>
+            <p id="sprintDates" class="sprint-dates"></p>
+          </div>
+        </div>
+
+        <div class="grid-container">
+          <div class="grid-wrapper">
+            <div class="grid-table">
+              <table id="timesheetGrid" class="timesheet-grid">
+                <thead></thead>
+                <tbody></tbody>
+                <tfoot></tfoot>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Loading Overlay -->
+        <div id="loadingOverlay" class="loading-overlay hidden">
+          <div class="spinner"></div>
+          <p>Loading sprint data...</p>
+        </div>
+      </div>
+
+      <!-- Settings Modal -->
+      <div id="settingsModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h3>Settings</h3>
+            <button id="closeSettingsBtn" class="icon-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div class="settings-section">
+              <h4>Atlassian OAuth 2.0</h4>
+              <p class="settings-help">
+                Create an OAuth 2.0 app at 
+                <a href="https://developer.atlassian.com/console/myapps/" target="_blank">developer.atlassian.com</a>
+                <br>Set callback URL to: <code>http://localhost:8089/callback</code>
+              </p>
+              <div class="form-group">
+                <label for="clientId">Client ID</label>
+                <input type="text" id="clientId" placeholder="Enter your Client ID">
+              </div>
+              <div class="form-group">
+                <label for="clientSecret">Client Secret</label>
+                <input type="password" id="clientSecret" placeholder="Enter your Client Secret">
+              </div>
+            </div>
+            <div class="settings-section">
+              <h4>Jira Configuration</h4>
+              <div class="form-group">
+                <label for="boardId">Board ID</label>
+                <input type="text" id="boardId" placeholder="Enter your Jira Board ID">
+                <span class="form-hint">Find this in your board URL: /boards/123</span>
+              </div>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="saveSettingsBtn" class="btn-primary">Save Settings</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Worklog Modal -->
+      <div id="worklogModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content worklog-modal">
+          <div class="modal-header">
+            <h3>Edit Hours</h3>
+            <button id="closeWorklogBtn" class="icon-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <p class="worklog-meta">
+              <span id="worklogIssue"></span>
+              <span class="worklog-separator">/</span>
+              <span id="worklogDate"></span>
+            </p>
+            <div class="form-group worklog-input-group">
+              <label for="worklogHoursInput">Hours</label>
+              <div class="worklog-input-row">
+                <input type="number" id="worklogHoursInput" min="0" step="0.1" placeholder="0.0">
+                <div class="stepper-group">
+                  <button id="decreaseWorklogBtn" class="stepper-btn" type="button" aria-label="Decrease hours">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                  </button>
+                  <button id="increaseWorklogBtn" class="stepper-btn" type="button" aria-label="Increase hours">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <span class="form-hint">Use 0 to remove hours for this day.</span>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button id="clearWorklogBtn" class="btn-secondary">Clear</button>
+            <button id="cancelWorklogBtn" class="btn-secondary">Cancel</button>
+            <button id="saveWorklogBtn" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status Popover -->
+      <div id="statusPopoverBackdrop" class="status-popover-backdrop hidden"></div>
+      <div id="statusPopover" class="status-popover hidden">
+        <div id="statusList" class="status-list"></div>
+      </div>
+    </main>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

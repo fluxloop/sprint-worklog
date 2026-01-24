@@ -2,7 +2,7 @@
 const loginView = document.getElementById('loginView');
 const dashboardView = document.getElementById('dashboardView');
 const loginBtn = document.getElementById('loginBtn');
-const logoutBtn = document.getElementById('logoutBtn');
+const settingsLogoutBtn = document.getElementById('settingsLogoutBtn');
 const refreshBtn = document.getElementById('refreshBtn');
 const refreshText = refreshBtn ? refreshBtn.querySelector('.refresh-text') : null;
 const settingsBtn = document.getElementById('settingsBtn');
@@ -12,10 +12,12 @@ const saveSettingsBtn = document.getElementById('saveSettingsBtn');
 const loadingOverlay = document.getElementById('loadingOverlay');
 const userInfo = document.getElementById('userInfo');
 const userName = document.getElementById('userName');
+const apiTokenLink = document.getElementById('apiTokenLink');
 
 // Settings inputs
-const clientIdInput = document.getElementById('clientId');
-const clientSecretInput = document.getElementById('clientSecret');
+const emailInput = document.getElementById('email');
+const apiTokenInput = document.getElementById('apiToken');
+const siteUrlInput = document.getElementById('siteUrl');
 const boardIdInput = document.getElementById('boardId');
 
 // Stats
@@ -71,7 +73,7 @@ async function init() {
   const auth = await window.api.getAuthStatus();
   
   if (auth.isAuthenticated) {
-    showDashboard(auth.siteName);
+    showDashboard(auth.displayName);
     loadSprintData();
   } else {
     showLogin();
@@ -82,14 +84,14 @@ function showLogin() {
   loginView.classList.remove('hidden');
   dashboardView.classList.add('hidden');
   userInfo.classList.add('hidden');
-  document.title = 'Sprint Timesheet';
+  document.title = 'Jira Sprint Worklog';
 }
 
-function showDashboard(siteName) {
+function showDashboard(displayName) {
   loginView.classList.add('hidden');
   dashboardView.classList.remove('hidden');
   userInfo.classList.remove('hidden');
-  userName.textContent = siteName || 'Connected';
+  userName.textContent = displayName || 'Connected';
 }
 
 function showLoading(show) {
@@ -113,16 +115,32 @@ function showToast(message, isError = true) {
   setTimeout(() => toast.remove(), 5000);
 }
 
+const openSettingsModal = async () => {
+  const settings = await window.api.getSettings();
+  emailInput.value = settings.email || '';
+  apiTokenInput.value = settings.apiToken || '';
+  siteUrlInput.value = settings.siteUrl || '';
+  boardIdInput.value = settings.boardId || '';
+  settingsModal.classList.remove('hidden');
+};
+
 // Auth handlers
 loginBtn.addEventListener('click', async () => {
   try {
+    const settings = await window.api.getSettings();
+    if (!settings.email || !settings.apiToken || !settings.siteUrl) {
+      await openSettingsModal();
+      showToast('Please complete settings before connecting.');
+      return;
+    }
+
     loginBtn.disabled = true;
     loginBtn.textContent = 'Connecting...';
     
-    const result = await window.api.startOAuth();
+    const result = await window.api.startTokenLogin();
     
     if (result.success) {
-      showDashboard(result.siteName);
+      showDashboard(result.displayName);
       loadSprintData();
     }
   } catch (error) {
@@ -130,26 +148,20 @@ loginBtn.addEventListener('click', async () => {
   } finally {
     loginBtn.disabled = false;
     loginBtn.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-        <path d="M11.571 5.143c0 2.286-.857 3.714-2.571 4.286l4.286 9.428h-3.429L5.57 9.43H4.286v9.428H1.143V5.143h5.143c3.143 0 5.285 1.143 5.285 4v.143zm-7.285 3h1.857c1.429 0 2.143-.714 2.143-2 0-1.143-.714-1.857-2.143-1.857H4.286v3.857zM23.43 18.857h-3.143v-6c0-1.714-.572-2.571-1.715-2.571-1.428 0-2.143 1.143-2.143 2.857v5.714h-3.143V7.714h3.143v1.715c.572-1.143 1.714-2 3.429-2 2.285 0 3.571 1.428 3.571 4.285v7.143z"/>
-      </svg>
-      Sign in with Atlassian
+      Connect to Atlassian
     `;
   }
 });
 
-logoutBtn.addEventListener('click', async () => {
+settingsLogoutBtn.addEventListener('click', async () => {
   await window.api.logout();
+  settingsModal.classList.add('hidden');
   showLogin();
 });
 
 // Settings handlers
 settingsBtn.addEventListener('click', async () => {
-  const settings = await window.api.getSettings();
-  clientIdInput.value = settings.clientId || '';
-  clientSecretInput.value = settings.clientSecret || '';
-  boardIdInput.value = settings.boardId || '';
-  settingsModal.classList.remove('hidden');
+  await openSettingsModal();
 });
 
 closeSettingsBtn.addEventListener('click', () => {
@@ -160,10 +172,24 @@ settingsModal.querySelector('.modal-backdrop').addEventListener('click', () => {
   settingsModal.classList.add('hidden');
 });
 
+if (apiTokenLink) {
+  apiTokenLink.addEventListener('click', async (event) => {
+    event.preventDefault();
+    const url = apiTokenLink.getAttribute('href');
+    if (!url) return;
+    try {
+      await window.api.openExternal(url);
+    } catch (error) {
+      showToast(error.message);
+    }
+  });
+}
+
 saveSettingsBtn.addEventListener('click', async () => {
   await window.api.saveSettings({
-    clientId: clientIdInput.value.trim(),
-    clientSecret: clientSecretInput.value.trim(),
+    email: emailInput.value.trim(),
+    apiToken: apiTokenInput.value.trim(),
+    siteUrl: siteUrlInput.value.trim(),
     boardId: boardIdInput.value.trim()
   });
   settingsModal.classList.add('hidden');
@@ -689,7 +715,7 @@ function renderDashboard(data) {
   // Update sprint info
   sprintNameEl.textContent = data.sprint.name;
   sprintDatesEl.textContent = `${formatDate(data.sprint.startDate)} → ${formatDate(data.sprint.endDate)}`;
-  document.title = `Sprint Timesheet - ${data.sprint.name} (${formatDate(data.sprint.startDate)} - ${formatDate(data.sprint.endDate)})`;
+  document.title = `Jira Sprint Worklog - ${data.sprint.name} (${formatDate(data.sprint.startDate)} - ${formatDate(data.sprint.endDate)})`;
   
   const issues = getOrderedIssues(data);
   const totals = calculateTotals(issues);

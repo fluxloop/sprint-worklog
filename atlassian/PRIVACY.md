@@ -1,9 +1,9 @@
 ## Privacy Policy - Sprint Timesheet
 
-Effective date: 2026-01-20
+Effective date: 2026-01-23
 
 This Privacy Policy describes how the Sprint Timesheet desktop app ("App") and
-its Atlassian OAuth 2.0 integration handle information.
+its Atlassian API token authentication handle information.
 
 ### Summary
 
@@ -15,7 +15,7 @@ its Atlassian OAuth 2.0 integration handle information.
 
 When you connect your Atlassian account, the App may access:
 
-- OAuth tokens (access and refresh tokens).
+- Your Atlassian API token.
 - Your Atlassian account ID and display name.
 - Jira data needed to show your sprint worklogs, such as boards, sprints,
   issues, statuses, labels, story points, and worklogs.
@@ -51,8 +51,8 @@ system is perfectly secure, so please use appropriate device security.
 
 ### Your Choices
 
-- You can revoke access by signing out or by revoking the App in your Atlassian
-  account settings.
+- You can revoke access by signing out or by revoking the API token in your
+  Atlassian account settings.
 - You can delete local data by clearing the App's data or uninstalling it.
 
 ### Changes

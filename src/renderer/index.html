@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
-  <title>Sprint Timesheet</title>
+  <title>Jira Sprint Worklog</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -19,7 +19,7 @@
             <line x1="8" y1="2" x2="8" y2="6"></line>
             <line x1="3" y1="10" x2="21" y2="10"></line>
           </svg>
-          <span>Sprint Timesheet</span>
+          <span>Jira Sprint Worklog</span>
         </div>
       </div>
       <div class="titlebar-actions">
@@ -39,7 +39,6 @@
             </svg>
             <span class="refresh-text">Refresh</span>
           </button>
-          <button id="logoutBtn" class="btn-secondary btn-small">Logout</button>
         </div>
       </div>
     </header>
@@ -54,15 +53,12 @@
               <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path>
             </svg>
           </div>
-          <h1>Sprint Timesheet</h1>
+          <h1>Jira Sprint Worklog</h1>
           <p class="login-subtitle">Connect your Atlassian account to view your sprint worklogs</p>
           <button id="loginBtn" class="btn-primary btn-large">
-            <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
-              <path d="M11.571 5.143c0 2.286-.857 3.714-2.571 4.286l4.286 9.428h-3.429L5.57 9.43H4.286v9.428H1.143V5.143h5.143c3.143 0 5.285 1.143 5.285 4v.143zm-7.285 3h1.857c1.429 0 2.143-.714 2.143-2 0-1.143-.714-1.857-2.143-1.857H4.286v3.857zM23.43 18.857h-3.143v-6c0-1.714-.572-2.571-1.715-2.571-1.428 0-2.143 1.143-2.143 2.857v5.714h-3.143V7.714h3.143v1.715c.572-1.143 1.714-2 3.429-2 2.285 0 3.571 1.428 3.571 4.285v7.143z"/>
-            </svg>
-            Sign in with Atlassian
+            Connect to Atlassian
           </button>
-          <p class="login-note">First time? Configure your OAuth app in Settings</p>
+          <p class="login-note">First time? Configure your API token in Settings</p>
         </div>
       </div>
 
@@ -114,19 +110,23 @@
           </div>
           <div class="modal-body">
             <div class="settings-section">
-              <h4>Atlassian OAuth 2.0</h4>
+              <h4>Atlassian API Token</h4>
               <p class="settings-help">
-                Create an OAuth 2.0 app at 
-                <a href="https://developer.atlassian.com/console/myapps/" target="_blank">developer.atlassian.com</a>
-                <br>Set callback URL to: <code>http://localhost:8089/callback</code>
+                Create or manage an API token at
+                <a id="apiTokenLink" href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noreferrer">id.atlassian.com</a>
               </p>
               <div class="form-group">
-                <label for="clientId">Client ID</label>
-                <input type="text" id="clientId" placeholder="Enter your Client ID">
+                <label for="email">Email</label>
+                <input type="email" id="email" placeholder="name@company.com">
               </div>
               <div class="form-group">
-                <label for="clientSecret">Client Secret</label>
-                <input type="password" id="clientSecret" placeholder="Enter your Client Secret">
+                <label for="apiToken">API Token</label>
+                <input type="password" id="apiToken" placeholder="Paste your API token">
+              </div>
+              <div class="form-group">
+                <label for="siteUrl">Jira Site URL</label>
+                <input type="text" id="siteUrl" placeholder="https://your-domain.atlassian.net">
+                <span class="form-hint">Include https:// and omit trailing slashes.</span>
               </div>
             </div>
             <div class="settings-section">
@@ -139,6 +139,7 @@
             </div>
           </div>
           <div class="modal-footer">
+            <button id="settingsLogoutBtn" class="btn-secondary btn-danger">Logout</button>
             <button id="saveSettingsBtn" class="btn-primary">Save Settings</button>
           </div>
         </div>

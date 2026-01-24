@@ -1,7 +1,5 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeImage, shell } = require('electron');
 const path = require('path');
-const http = require('http');
-const url = require('url');
 const Store = require('electron-store');
 
 const store = new Store();
@@ -40,8 +38,8 @@ const requestJson = async (fetch, url, headers) => {
     const baseMessage = `API error: ${response.status} - ${text}`;
     if (response.status === 401 && text.includes('scope does not match')) {
       const hint = url.includes('/rest/agile/1.0/')
-        ? 'Add Jira Software scopes (read:sprint:jira-software, read:board-scope:jira-software) to your OAuth app, then sign out and sign in again.'
-        : 'Check your OAuth app scopes and sign out and sign in again.';
+        ? 'Make sure your Jira user has Jira Software access and the token has the required permissions.'
+        : 'Check your Jira permissions and API token.';
       throw new Error(`${baseMessage}. ${hint}`);
     }
     throw new Error(baseMessage);
@@ -78,31 +76,29 @@ const buildDatesArray = (startDateKey, endDateKey) => {
   return dates;
 };
 
-const getApiContext = () => {
-  const accessToken = store.get('accessToken');
-  const cloudId = store.get('cloudId');
-  if (!accessToken || !cloudId) {
-    throw new Error('Not authenticated');
-  }
-  const baseUrl = `https://api.atlassian.com/ex/jira/${cloudId}`;
-  const headers = {
-    'Authorization': `Bearer ${accessToken}`,
-    'Accept': 'application/json'
-  };
-  return { accessToken, cloudId, baseUrl, headers };
+const normalizeSiteUrl = (siteUrl) => {
+  const trimmed = String(siteUrl || '').trim();
+  if (!trimmed) return '';
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
 };
 
-const getSiteUrl = async (accessToken, cloudId) => {
-  const cached = store.get('siteUrl');
-  if (cached) return cached;
-  const resources = await getAccessibleResources(accessToken);
-  const match = resources.find((resource) => resource.id === cloudId) || resources[0];
-  const siteUrl = match?.url || '';
-  if (siteUrl) {
-    store.set('siteUrl', siteUrl);
+const getApiContext = () => {
+  const email = store.get('email');
+  const apiToken = store.get('apiToken');
+  const siteUrl = normalizeSiteUrl(store.get('siteUrl'));
+  if (!email || !apiToken || !siteUrl) {
+    throw new Error('Not authenticated');
   }
-  return siteUrl;
+  const baseUrl = siteUrl;
+  const authToken = Buffer.from(`${email}:${apiToken}`).toString('base64');
+  const headers = {
+    'Authorization': `Basic ${authToken}`,
+    'Accept': 'application/json'
+  };
+  return { baseUrl, headers, siteUrl };
 };
+
+const getSiteUrl = () => normalizeSiteUrl(store.get('siteUrl'));
 
 const getUserContext = async (fetch, baseUrl, headers) => {
   if (userCache && Date.now() - userCacheAt < USER_CACHE_TTL_MS) {
@@ -187,21 +183,12 @@ const getActiveSprintInfo = async (fetch, baseUrl, headers, boardId) => {
   throw new Error('No active sprint found on this board');
 };
 
-// Atlassian OAuth 2.0 configuration
-const ATLASSIAN_AUTH_URL = 'https://auth.atlassian.com/authorize';
-const ATLASSIAN_TOKEN_URL = 'https://auth.atlassian.com/oauth/token';
-const REDIRECT_PORT = 8089;
-const REDIRECT_URI = `http://localhost:${REDIRECT_PORT}/callback`;
-
-// You need to create an OAuth 2.0 app at https://developer.atlassian.com/console/myapps/
-// Set these in the app or via environment variables
-let CLIENT_ID = process.env.ATLASSIAN_CLIENT_ID || '';
-let CLIENT_SECRET = process.env.ATLASSIAN_CLIENT_SECRET || '';
-
 let mainWindow;
-let authServer;
 
 function createWindow() {
+  const iconPath = process.platform === 'win32'
+    ? path.join(__dirname, '../../build/icon.ico')
+    : path.join(__dirname, '../../build/icon_rounded.png');
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -209,6 +196,7 @@ function createWindow() {
     minHeight: 600,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0d1117',
+    icon: iconPath,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -219,10 +207,18 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  if (process.platform === 'darwin') {
+    const dockIconPath = path.join(__dirname, '../../build/icon_rounded.png');
+    const dockIcon = nativeImage.createFromPath(dockIconPath);
+    if (!dockIcon.isEmpty()) {
+      app.dock.setIcon(dockIcon);
+    }
+  }
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
-  if (authServer) authServer.close();
   if (process.platform !== 'darwin') app.quit();
 });
 
@@ -233,157 +229,62 @@ app.on('activate', () => {
 // IPC Handlers
 
 ipcMain.handle('get-auth-status', async () => {
-  const accessToken = store.get('accessToken');
-  const cloudId = store.get('cloudId');
-  const siteName = store.get('siteName');
-  const siteUrl = store.get('siteUrl');
+  const email = store.get('email');
+  const apiToken = store.get('apiToken');
+  const siteUrl = getSiteUrl();
+  const displayName = store.get('displayName');
   return { 
-    isAuthenticated: !!(accessToken && cloudId),
-    siteName,
+    isAuthenticated: !!(email && apiToken && siteUrl),
+    displayName,
     siteUrl
   };
 });
 
 ipcMain.handle('get-settings', async () => {
   return {
-    clientId: store.get('clientId', ''),
-    clientSecret: store.get('clientSecret', ''),
+    email: store.get('email', ''),
+    apiToken: store.get('apiToken', ''),
+    siteUrl: store.get('siteUrl', ''),
     boardId: store.get('boardId', '')
   };
 });
 
 ipcMain.handle('save-settings', async (event, settings) => {
-  store.set('clientId', settings.clientId);
-  store.set('clientSecret', settings.clientSecret);
+  store.set('email', settings.email);
+  store.set('apiToken', settings.apiToken);
+  store.set('siteUrl', normalizeSiteUrl(settings.siteUrl));
   store.set('boardId', settings.boardId);
-  CLIENT_ID = settings.clientId;
-  CLIENT_SECRET = settings.clientSecret;
   return true;
 });
 
-ipcMain.handle('start-oauth', async () => {
-  CLIENT_ID = store.get('clientId', '');
-  CLIENT_SECRET = store.get('clientSecret', '');
-  
-  if (!CLIENT_ID || !CLIENT_SECRET) {
-    throw new Error('Please configure OAuth credentials in Settings first');
+ipcMain.handle('start-token-login', async () => {
+  const email = store.get('email');
+  const apiToken = store.get('apiToken');
+  const siteUrl = getSiteUrl();
+
+  if (!email || !apiToken || !siteUrl) {
+    throw new Error('Please configure email, API token, and site URL in Settings first');
+  }
+  if (!/^https?:\/\//i.test(siteUrl)) {
+    throw new Error('Site URL must start with https://');
   }
 
-  return new Promise((resolve, reject) => {
-    // Create local server to receive callback
-    authServer = http.createServer(async (req, res) => {
-      const parsedUrl = url.parse(req.url, true);
-      
-      if (parsedUrl.pathname === '/callback') {
-        const code = parsedUrl.query.code;
-        
-        if (code) {
-          res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end('<html><body><h1>Authentication successful!</h1><p>You can close this window.</p><script>window.close();</script></body></html>');
-          
-          authServer.close();
-          
-          try {
-            // Exchange code for token
-            const tokenResponse = await exchangeCodeForToken(code);
-            store.set('accessToken', tokenResponse.access_token);
-            store.set('refreshToken', tokenResponse.refresh_token);
-            
-            // Get accessible resources (cloud instances)
-            const resources = await getAccessibleResources(tokenResponse.access_token);
-            if (resources.length > 0) {
-              store.set('cloudId', resources[0].id);
-              store.set('siteName', resources[0].name);
-              if (resources[0].url) {
-                store.set('siteUrl', resources[0].url);
-              }
-            }
-            
-            resolve({ success: true, siteName: resources[0]?.name });
-          } catch (error) {
-            reject(error);
-          }
-        } else {
-          res.writeHead(400, { 'Content-Type': 'text/html' });
-          res.end('<html><body><h1>Authentication failed</h1></body></html>');
-          authServer.close();
-          reject(new Error('No authorization code received'));
-        }
-      }
-    });
-
-    authServer.listen(REDIRECT_PORT, () => {
-      const authUrl = `${ATLASSIAN_AUTH_URL}?` + new URLSearchParams({
-        audience: 'api.atlassian.com',
-        client_id: CLIENT_ID,
-        scope: [
-          // Classic scopes (broader permissions)
-          'read:jira-work',
-          'read:jira-user',
-          'write:jira-work',
-          'read:sprint:jira-software',
-          'read:board-scope:jira-software',
-          'offline_access'
-        ].join(' '),
-        redirect_uri: REDIRECT_URI,
-        response_type: 'code',
-        prompt: 'consent',
-        state: Math.random().toString(36).substring(7)
-      });
-
-      shell.openExternal(authUrl);
-    });
-
-    authServer.on('error', reject);
-  });
+  const fetch = require('node-fetch');
+  const { baseUrl, headers } = getApiContext();
+  const myself = await requestJson(fetch, `${baseUrl}/rest/api/3/myself`, headers);
+  store.set('displayName', myself.displayName || email);
+  return { success: true, displayName: myself.displayName || email };
 });
 
-async function exchangeCodeForToken(code) {
-  const fetch = require('node-fetch');
-  
-  const response = await fetch(ATLASSIAN_TOKEN_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'authorization_code',
-      client_id: CLIENT_ID,
-      client_secret: CLIENT_SECRET,
-      code: code,
-      redirect_uri: REDIRECT_URI
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(`Token exchange failed: ${error}`);
-  }
-
-  return response.json();
-}
-
-async function getAccessibleResources(accessToken) {
-  const fetch = require('node-fetch');
-  
-  const response = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
-    headers: { 
-      'Authorization': `Bearer ${accessToken}`,
-      'Accept': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    throw new Error('Failed to get accessible resources');
-  }
-
-  return response.json();
-}
-
 ipcMain.handle('logout', async () => {
+  store.delete('email');
+  store.delete('apiToken');
+  store.delete('siteUrl');
+  store.delete('displayName');
   store.delete('accessToken');
   store.delete('refreshToken');
   store.delete('cloudId');
   store.delete('siteName');
-  store.delete('siteUrl');
   userCache = null;
   userCacheAt = 0;
   fieldCache = null;
@@ -395,24 +296,14 @@ ipcMain.handle('logout', async () => {
 
 ipcMain.handle('fetch-sprint-data', async () => {
   const fetch = require('node-fetch');
-  
-  const accessToken = store.get('accessToken');
-  const cloudId = store.get('cloudId');
-  const boardId = store.get('boardId');
 
-  if (!accessToken || !cloudId) {
-    throw new Error('Not authenticated');
-  }
+  const boardId = store.get('boardId');
 
   if (!boardId) {
     throw new Error('Please configure Board ID in Settings');
   }
 
-  const baseUrl = `https://api.atlassian.com/ex/jira/${cloudId}`;
-  const headers = {
-    'Authorization': `Bearer ${accessToken}`,
-    'Accept': 'application/json'
-  };
+  const { baseUrl, headers } = getApiContext();
 
   const getJson = async (url) => {
     console.log('Fetching:', url);
@@ -609,9 +500,9 @@ ipcMain.handle('fetch-sprint-issues', async () => {
     throw new Error('Please configure Board ID in Settings');
   }
 
-  const { accessToken, cloudId, baseUrl, headers } = getApiContext();
+  const { baseUrl, headers } = getApiContext();
   const { jiraTimeZone, displayName } = await getUserContext(fetch, baseUrl, headers);
-  const siteUrl = await getSiteUrl(accessToken, cloudId);
+  const siteUrl = getSiteUrl();
 
   let sprintInfo;
   try {

@@ -1,12 +1,12 @@
-# Sprint Timesheet
+# Jira Sprint Worklog
 
 A beautiful Electron app to view your Jira sprint worklogs.
 
-![Sprint Timesheet](screenshot.png)
+![Jira Sprint Worklog](screenshot.png)
 
 ## Features
 
-- 🔐 **Atlassian OAuth 2.0** - Secure authentication with your Atlassian account
+- 🔐 **Atlassian API Token** - Authenticate with your Atlassian account
 - 📊 **Visual Grid** - See your logged hours across tasks and days
 - 📈 **Statistics** - Total hours, average per day, and task count
 - 🎯 **Story Points** - View story point estimates per issue
@@ -23,23 +23,11 @@ A beautiful Electron app to view your Jira sprint worklogs.
 
 ## Setup
 
-### 1. Create an Atlassian OAuth 2.0 App
+### 1. Create an Atlassian API Token
 
-1. Go to [Atlassian Developer Console](https://developer.atlassian.com/console/myapps/)
-2. Click **Create** → **OAuth 2.0 integration**
-3. Give it a name (e.g., "Sprint Timesheet")
-4. Under **Authorization**, add a callback URL:
-   ```
-   http://localhost:8089/callback
-   ```
-5. Under **Permissions**, add:
-   - `read:jira-work`
-   - `read:jira-user`
-   - `write:jira-work`
-   - `read:sprint:jira-software`
-   - `read:board-scope:jira-software`
-   If you change scopes later, sign out in the app and sign in again.
-6. Copy your **Client ID** and **Client Secret**
+1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
+2. Click **Create API token**
+3. Copy the token (you will need it in Settings)
 
 ### 2. Install Dependencies
 
@@ -57,13 +45,13 @@ npm start
 ### 4. Configure
 
 1. Click the **Settings** (gear icon) in the top right
-2. Enter your **Client ID** and **Client Secret**
+2. Enter your **Email**, **API Token**, and **Jira Site URL**
 3. Enter your **Board ID** (find it in your Jira board URL: `/boards/123`)
 4. Click **Save Settings**
 
 ### 5. Sign In
 
-Click "Sign in with Atlassian" and authorize the app.
+Click "Connect to Atlassian" to validate your credentials.
 
 ## Usage
 
@@ -71,18 +59,9 @@ Click "Sign in with Atlassian" and authorize the app.
 - **Update status**: Click the status pill in a row to choose a new workflow status.
 - **Edit worklogs**: Click any day cell to add, edit, or clear hours (including past days in the sprint).
 
-## Optional Environment Variables
-
-You can provide OAuth credentials via environment variables instead of the UI:
-
-- `ATLASSIAN_CLIENT_ID`
-- `ATLASSIAN_CLIENT_SECRET`
-
-The board ID is still set via the Settings UI.
-
 ## Troubleshooting
 
-- **401 scope does not match**: Ensure the scopes above are set on the OAuth app, then sign out and sign in again.
+- **401 Unauthorized**: Verify your email, API token, and Jira site URL are correct. Ensure your account has Jira Software access.
 - **No active sprint found**: Confirm the board ID and that there is an active sprint on that board.
 - **Missing story points**: Your Jira instance should have a story point field such as "Story point estimate".
 
@@ -94,17 +73,20 @@ npm run dev
 
 ## Building for Distribution
 
-To package the app for distribution, you can use [electron-builder](https://www.electron.build/):
-
 ```bash
-npm install electron-builder --save-dev
-npx electron-builder
+npm install
+npm run build:mac
 ```
+
+Artifacts are written to `dist/`:
+
+- macOS: `.dmg`
+- Windows: portable `.exe` (run `npm run build:win` on Windows)
 
 ## Tech Stack
 
 - **Electron** - Cross-platform desktop app
-- **Atlassian OAuth 2.0** - Secure authentication
+- **Atlassian API tokens** - Authentication
 - **Jira REST API** - Sprint and worklog data
 - **Vanilla JS/CSS** - No framework overhead, fast and light
 

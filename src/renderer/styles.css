@@ -149,6 +149,16 @@ body {
   border-color: var(--text-muted);
 }
 
+.btn-danger {
+  background: var(--accent-red);
+  border-color: var(--accent-red);
+  color: #ffffff;
+}
+
+.btn-danger:hover {
+  filter: brightness(0.95);
+}
+
 .btn-small {
   padding: 4px 10px;
   font-size: 12px;
@@ -375,7 +385,6 @@ body {
   padding: 0 12px 12px 0;
   box-sizing: border-box;
   background: var(--bg-primary);
-  scrollbar-gutter: stable both-edges;
 }
 
 .grid-table {
@@ -807,6 +816,7 @@ body {
   border-top: 1px solid var(--border-color);
   display: flex;
   justify-content: flex-end;
+  gap: 12px;
 }
 
 .btn-loading {
@@ -1003,6 +1013,10 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-muted);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--bg-primary);
 }
 
 /* Error toast */

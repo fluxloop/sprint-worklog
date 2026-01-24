@@ -1,10 +1,10 @@
 ## Terms of Service - Sprint Timesheet
 
-Effective date: 2026-01-20
+Effective date: 2026-01-23
 
 These Terms of Service ("Terms") apply to the Sprint Timesheet desktop app
-("App") and its Atlassian OAuth 2.0 integration. By using the App, you agree to
-these Terms.
+("App") and its Atlassian API token authentication. By using the App, you agree
+to these Terms.
 
 ### Use of the App
 
@@ -26,7 +26,7 @@ services is governed by Atlassian's terms and privacy policy.
 
 ### Availability and Changes
 
-We may update or discontinue the App or the OAuth integration at any time. We
+We may update or discontinue the App or its authentication flow at any time. We
 are not obligated to provide ongoing support or maintenance.
 
 ### Disclaimer

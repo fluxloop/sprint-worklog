@@ -46,7 +46,18 @@ const statusPopover = document.getElementById('statusPopover');
 const statusPopoverBackdrop = document.getElementById('statusPopoverBackdrop');
 const statusList = document.getElementById('statusList');
 
+// Task detail modal
+const taskDetailModal = document.getElementById('taskDetailModal');
+const taskDetailTitle = document.getElementById('taskDetailTitle');
+const closeTaskDetailBtn = document.getElementById('closeTaskDetailBtn');
+const taskDetailLoading = document.getElementById('taskDetailLoading');
+const taskDetailContent = document.getElementById('taskDetailContent');
+const addSubtaskBtn = document.getElementById('addSubtaskBtn');
+const openInJiraBtn = document.getElementById('openInJiraBtn');
+const deleteIssueBtn = document.getElementById('deleteIssueBtn');
+
 // State
+let appVersion = '';
 let currentData = null;
 let pendingWorklog = null;
 let issueOrder = [];
@@ -60,6 +71,7 @@ let statusAnchorEl = null;
 let statusOrderMap = new Map();
 let transitionCache = new Map();
 let transitionRequests = new Map();
+let activeTaskDetailKey = null;
 
 const TRANSITION_PREFETCH_CONCURRENCY = 3;
 
@@ -69,9 +81,15 @@ if (navigator.platform && navigator.platform.toLowerCase().includes('mac')) {
 }
 
 // Initialize
+const appTitle = () => `Jira Sprint Worklog - v${appVersion}`;
+
 async function init() {
   const auth = await window.api.getAuthStatus();
-  
+  appVersion = auth.version || '';
+
+  const titleSpan = document.querySelector('.app-title span');
+  if (titleSpan) titleSpan.textContent = appTitle();
+
   if (auth.isAuthenticated) {
     showDashboard(auth.displayName);
     loadSprintData();
@@ -84,7 +102,7 @@ function showLogin() {
   loginView.classList.remove('hidden');
   dashboardView.classList.add('hidden');
   userInfo.classList.add('hidden');
-  document.title = 'Jira Sprint Worklog';
+  document.title = appTitle();
 }
 
 function showDashboard(displayName) {
@@ -432,11 +450,40 @@ if (timesheetGrid) {
   timesheetGrid.addEventListener('click', (event) => {
     const target = event.target instanceof Element ? event.target : event.target.parentElement;
     if (!target) return;
+    const toggleBtn = target.closest('.subtask-toggle');
+    if (toggleBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      const row = toggleBtn.closest('tr');
+      const parentKey = row?.dataset.issueKey;
+      if (parentKey) {
+        const isCollapsed = toggleBtn.classList.toggle('is-collapsed');
+        const tbody = row.closest('tbody');
+        if (tbody) {
+          tbody.querySelectorAll('tr.subtask-row').forEach((subtaskRow) => {
+            const subtaskData = currentData.worklogs[subtaskRow.dataset.issueKey];
+            if (subtaskData && subtaskData.parentKey === parentKey) {
+              subtaskRow.style.display = isCollapsed ? 'none' : '';
+            }
+          });
+        }
+      }
+      return;
+    }
+
+    const externalLinkBtn = target.closest('.external-link-btn');
+    if (externalLinkBtn) {
+      event.preventDefault();
+      event.stopPropagation();
+      openIssueInBrowser(externalLinkBtn.dataset.issueKey);
+      return;
+    }
+
     const issueLink = target.closest('.issue-link');
     if (issueLink) {
       event.preventDefault();
       event.stopPropagation();
-      openIssueInBrowser(issueLink.dataset.issueKey);
+      openTaskDetailModal(issueLink.dataset.issueKey);
       return;
     }
 
@@ -537,6 +584,7 @@ if (statusList) {
         currentData.worklogs[issueKey].statusCategory = result.statusCategory;
       }
       updateStatusCell(issueKey);
+      updateDetailStatusPill(issueKey);
       showToast('Status updated.', false);
     } catch (error) {
       showToast(error.message);
@@ -587,6 +635,8 @@ async function loadSprintData() {
         statusCategory: issue.statusCategory,
         labels: issue.labels,
         points: issue.points,
+        isSubtask: issue.isSubtask || false,
+        parentKey: issue.parentKey || null,
         days: {}
       };
     });
@@ -629,10 +679,36 @@ async function loadSprintData() {
 
 function getOrderedIssues(data) {
   if (!data || !data.worklogs) return [];
+  let flat;
   if (issueOrder.length > 0) {
-    return issueOrder.map((key) => [key, data.worklogs[key]]).filter(([, issue]) => !!issue);
+    flat = issueOrder.map((key) => [key, data.worklogs[key]]).filter(([, issue]) => !!issue);
+  } else {
+    flat = Object.entries(data.worklogs);
   }
-  return Object.entries(data.worklogs);
+
+  // Group subtasks directly after their parent issue
+  const parentKeys = new Set(flat.filter(([, issue]) => !issue.isSubtask).map(([key]) => key));
+  const result = [];
+  const subtasksByParent = new Map();
+
+  for (const entry of flat) {
+    const [, issue] = entry;
+    if (issue.isSubtask && issue.parentKey && parentKeys.has(issue.parentKey)) {
+      if (!subtasksByParent.has(issue.parentKey)) subtasksByParent.set(issue.parentKey, []);
+      subtasksByParent.get(issue.parentKey).push(entry);
+    }
+  }
+
+  for (const entry of flat) {
+    const [key, issue] = entry;
+    if (issue.isSubtask && issue.parentKey && parentKeys.has(issue.parentKey)) continue;
+    result.push(entry);
+    if (subtasksByParent.has(key)) {
+      result.push(...subtasksByParent.get(key));
+    }
+  }
+
+  return result;
 }
 
 function calculateTotals(issues) {
@@ -689,6 +765,37 @@ function updateStatusCell(issueKey) {
   statusCell.innerHTML = `<span class="status-pill ${statusClass}">${escapeHtml(issue.status || 'Unknown')}</span>`;
 }
 
+function updateDetailStatusPill(issueKey) {
+  if (!taskDetailContent || activeTaskDetailKey !== issueKey) return;
+  const issue = currentData?.worklogs?.[issueKey];
+  if (!issue) return;
+  const pill = taskDetailContent.querySelector('.detail-status-pill');
+  if (!pill) return;
+  const statusClass = getStatusClass(issue.statusCategory);
+  pill.className = `status-pill detail-status-pill ${statusClass}`;
+  pill.textContent = issue.status || 'Unknown';
+}
+
+function updateSummaryCell(issueKey) {
+  if (!currentData || !timesheetGrid) return;
+  const issue = currentData.worklogs[issueKey];
+  if (!issue) return;
+  const row = timesheetGrid.querySelector(`tbody tr[data-issue-key="${issueKey}"]`);
+  if (!row) return;
+  const link = row.querySelector('.issue-link');
+  if (link) link.textContent = issue.summary;
+}
+
+function updatePointsCell(issueKey) {
+  if (!currentData || !timesheetGrid) return;
+  const issue = currentData.worklogs[issueKey];
+  if (!issue) return;
+  const row = timesheetGrid.querySelector(`tbody tr[data-issue-key="${issueKey}"]`);
+  if (!row) return;
+  const pointsCell = row.querySelector('td.points-cell');
+  if (pointsCell) pointsCell.textContent = Number.isFinite(issue.points) ? formatPoints(issue.points) : '-';
+}
+
 function updateFooterTotals() {
   if (!currentData || !timesheetGrid) return;
   const issues = getOrderedIssues(currentData);
@@ -715,7 +822,7 @@ function renderDashboard(data) {
   // Update sprint info
   sprintNameEl.textContent = data.sprint.name;
   sprintDatesEl.textContent = `${formatDate(data.sprint.startDate)} → ${formatDate(data.sprint.endDate)}`;
-  document.title = `Jira Sprint Worklog - ${data.sprint.name} (${formatDate(data.sprint.startDate)} - ${formatDate(data.sprint.endDate)})`;
+  document.title = `${appTitle()} - ${data.sprint.name} (${formatDate(data.sprint.startDate)} - ${formatDate(data.sprint.endDate)})`;
   
   const issues = getOrderedIssues(data);
   const totals = calculateTotals(issues);
@@ -756,7 +863,12 @@ function renderGrid(dates, issues, dayTotals, grandTotal, pointsTotal) {
   headerHtml += '<th class="total-col">Total</th><th class="points-col">Points</th></tr>';
   thead.innerHTML = headerHtml;
   
-  // Body
+  // Body — determine which parents have subtasks
+  const parentsWithSubtasks = new Set();
+  issues.forEach(([, issue]) => {
+    if (issue.isSubtask && issue.parentKey) parentsWithSubtasks.add(issue.parentKey);
+  });
+
   let bodyHtml = '';
   issues.forEach(([key, issue]) => {
     let rowTotal = 0;
@@ -764,18 +876,26 @@ function renderGrid(dates, issues, dayTotals, grandTotal, pointsTotal) {
     const labelsHtml = renderLabels(issue.labels || []);
     const pointsDisplay = Number.isFinite(issue.points) ? formatPoints(issue.points) : '-';
     const isLoading = worklogLoading.has(key);
+    const isSubtask = issue.isSubtask || false;
+    const hasSubtasks = parentsWithSubtasks.has(key);
+
+    const toggleBtn = hasSubtasks ? '<button class="subtask-toggle" type="button" title="Toggle subtasks"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M4.427 7.427l3.396 3.396a.25.25 0 00.354 0l3.396-3.396A.25.25 0 0011.396 7H4.604a.25.25 0 00-.177.427z"/></svg></button>' : '';
     let rowHtml = `
-      <tr data-issue-key="${key}">
+      <tr data-issue-key="${key}"${isSubtask ? ' class="subtask-row"' : ''}>
         <td class="issue-cell">
-          <div class="issue-key-row">
-            <span class="issue-key">${key}</span>
-            <span class="issue-spinner ${isLoading ? 'is-visible' : ''}"></span>
+          <div class="issue-cell-left">
+            <div class="issue-key-row">
+              <span class="issue-key">${key}</span>
+              <button class="external-link-btn" type="button" data-issue-key="${key}" title="Open in Jira"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 3H3.5A1.5 1.5 0 002 4.5v8A1.5 1.5 0 003.5 14h8a1.5 1.5 0 001.5-1.5V10M10 2h4v4M7 9l7-7"/></svg></button>
+              <span class="issue-spinner ${isLoading ? 'is-visible' : ''}"></span>
+            </div>
+            <div class="issue-summary">
+              <button class="issue-link" type="button" data-issue-key="${key}" title="View details">
+                ${escapeHtml(issue.summary)}
+              </button>
+            </div>
           </div>
-          <div class="issue-summary">
-            <button class="issue-link" type="button" data-issue-key="${key}" title="Open in Jira">
-              ${escapeHtml(issue.summary)}
-            </button>
-          </div>
+          ${toggleBtn}
         </td>
         <td class="status-cell">
           <span class="status-pill ${statusClass}">${escapeHtml(issue.status || 'Unknown')}</span>
@@ -876,6 +996,557 @@ function renderLabels(labels) {
   }).join('');
   return `<div class="labels-list">${items}</div>`;
 }
+
+// Task Detail Modal
+const openTaskDetailModal = async (issueKey) => {
+  if (!issueKey || !taskDetailModal) return;
+  activeTaskDetailKey = issueKey;
+  taskDetailTitle.textContent = issueKey;
+  taskDetailLoading.classList.remove('hidden');
+  taskDetailContent.classList.add('hidden');
+  taskDetailContent.innerHTML = '';
+  addSubtaskBtn.classList.add('hidden');
+  taskDetailModal.classList.remove('hidden');
+
+  try {
+    const details = await window.api.fetchIssueDetails({ issueKey });
+    if (activeTaskDetailKey !== issueKey) return;
+    renderTaskDetail(details);
+    taskDetailLoading.classList.add('hidden');
+    taskDetailContent.classList.remove('hidden');
+    if (!details.isSubtask) {
+      addSubtaskBtn.classList.remove('hidden');
+    }
+  } catch (error) {
+    taskDetailLoading.classList.add('hidden');
+    taskDetailContent.classList.remove('hidden');
+    taskDetailContent.innerHTML = `<p style="color:var(--accent-red)">${escapeHtml(error.message)}</p>`;
+  }
+};
+
+const closeTaskDetailModal = () => {
+  activeTaskDetailKey = null;
+  if (taskDetailModal) taskDetailModal.classList.add('hidden');
+  if (taskDetailContent) taskDetailContent.innerHTML = '';
+  if (addSubtaskBtn) addSubtaskBtn.classList.add('hidden');
+};
+
+const formatDetailDate = (isoStr) => {
+  if (!isoStr) return '-';
+  const d = new Date(isoStr);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+const htmlToAdf = (html) => {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(`<body>${html}</body>`, 'text/html');
+
+  const convertInline = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent;
+      if (!text) return [];
+      return [{ type: 'text', text }];
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return [];
+    const tag = node.tagName.toLowerCase();
+    const markMap = { strong: 'strong', b: 'strong', em: 'em', i: 'em', s: 'strike', u: 'underline', code: 'code' };
+    if (markMap[tag]) {
+      const children = [];
+      node.childNodes.forEach((c) => children.push(...convertInline(c)));
+      return children.map((c) => {
+        if (c.type !== 'text') return c;
+        const marks = [...(c.marks || []), { type: markMap[tag] }];
+        return { ...c, marks };
+      });
+    }
+    if (tag === 'a') {
+      const children = [];
+      node.childNodes.forEach((c) => children.push(...convertInline(c)));
+      return children.map((c) => {
+        if (c.type !== 'text') return c;
+        const marks = [...(c.marks || []), { type: 'link', attrs: { href: node.getAttribute('href') || '' } }];
+        return { ...c, marks };
+      });
+    }
+    if (tag === 'br') return [{ type: 'hardBreak' }];
+    const children = [];
+    node.childNodes.forEach((c) => children.push(...convertInline(c)));
+    return children;
+  };
+
+  const convertBlock = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node.textContent.trim();
+      if (!text) return [];
+      return [{ type: 'paragraph', content: [{ type: 'text', text }] }];
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return [];
+    const tag = node.tagName.toLowerCase();
+    if (tag === 'p' || tag === 'div') {
+      const content = [];
+      node.childNodes.forEach((c) => content.push(...convertInline(c)));
+      return [{ type: 'paragraph', content: content.length ? content : [{ type: 'text', text: '' }] }];
+    }
+    if (/^h[1-6]$/.test(tag)) {
+      const level = parseInt(tag[1], 10);
+      const content = [];
+      node.childNodes.forEach((c) => content.push(...convertInline(c)));
+      return [{ type: 'heading', attrs: { level }, content: content.length ? content : [{ type: 'text', text: '' }] }];
+    }
+    if (tag === 'ul' || tag === 'ol') {
+      const items = [];
+      node.querySelectorAll(':scope > li').forEach((li) => {
+        const content = [];
+        li.childNodes.forEach((c) => {
+          const childTag = c.nodeType === Node.ELEMENT_NODE ? c.tagName.toLowerCase() : '';
+          if (childTag === 'ul' || childTag === 'ol') {
+            content.push(...convertBlock(c));
+          } else {
+            content.push(...convertInline(c));
+          }
+        });
+        const inlineContent = content.filter((c) => c.type === 'text' || c.type === 'hardBreak');
+        const blockContent = content.filter((c) => c.type !== 'text' && c.type !== 'hardBreak');
+        const itemContent = [];
+        if (inlineContent.length) itemContent.push({ type: 'paragraph', content: inlineContent });
+        itemContent.push(...blockContent);
+        items.push({ type: 'listItem', content: itemContent.length ? itemContent : [{ type: 'paragraph', content: [{ type: 'text', text: '' }] }] });
+      });
+      return [{ type: tag === 'ul' ? 'bulletList' : 'orderedList', content: items }];
+    }
+    if (tag === 'blockquote') {
+      const content = [];
+      node.childNodes.forEach((c) => content.push(...convertBlock(c)));
+      return [{ type: 'blockquote', content: content.length ? content : [{ type: 'paragraph', content: [{ type: 'text', text: '' }] }] }];
+    }
+    if (tag === 'pre') {
+      const text = node.textContent || '';
+      return [{ type: 'codeBlock', content: [{ type: 'text', text }] }];
+    }
+    if (tag === 'hr') return [{ type: 'rule' }];
+    // Fallback: treat as paragraph with inline content
+    const content = [];
+    node.childNodes.forEach((c) => content.push(...convertInline(c)));
+    if (content.length) return [{ type: 'paragraph', content }];
+    return [];
+  };
+
+  const content = [];
+  doc.body.childNodes.forEach((c) => content.push(...convertBlock(c)));
+  return { version: 1, type: 'doc', content: content.length ? content : [{ type: 'paragraph', content: [{ type: 'text', text: '' }] }] };
+};
+
+const EDITOR_TOOLBAR_HTML = `
+  <div class="desc-editor-toolbar">
+    <button type="button" data-cmd="bold" title="Bold"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M4 2h4.5a3.5 3.5 0 012.447 6A3.5 3.5 0 019.5 14H4V2zm2 5h2.5a1.5 1.5 0 000-3H6v3zm0 2v3h3.5a1.5 1.5 0 000-3H6z"/></svg></button>
+    <button type="button" data-cmd="italic" title="Italic"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M6 2h6v2h-2.2l-2.6 8H9v2H3v-2h2.2l2.6-8H6V2z"/></svg></button>
+    <button type="button" data-cmd="insertUnorderedList" title="Bullet list"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="2" cy="4" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="2" cy="12" r="1.5"/><rect x="5" y="3" width="10" height="2" rx="0.5"/><rect x="5" y="7" width="10" height="2" rx="0.5"/><rect x="5" y="11" width="10" height="2" rx="0.5"/></svg></button>
+    <button type="button" data-cmd="insertOrderedList" title="Numbered list"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><text x="0" y="5.5" font-size="5" font-weight="600" font-family="sans-serif">1.</text><text x="0" y="9.5" font-size="5" font-weight="600" font-family="sans-serif">2.</text><text x="0" y="13.5" font-size="5" font-weight="600" font-family="sans-serif">3.</text><rect x="5" y="3" width="10" height="2" rx="0.5"/><rect x="5" y="7" width="10" height="2" rx="0.5"/><rect x="5" y="11" width="10" height="2" rx="0.5"/></svg></button>
+    <span class="desc-editor-spacer"></span>
+    <button type="button" class="desc-editor-cancel" title="Cancel">Cancel</button>
+    <button type="button" class="desc-editor-save btn-primary btn-small" title="Save">Save</button>
+  </div>
+`;
+
+const renderTaskDetail = (details) => {
+  if (!taskDetailContent) return;
+  const statusClass = getStatusClass(details.statusCategory);
+  const parentRow = details.parentKey
+    ? `<div class="detail-row"><span class="detail-label">Parent</span><span class="detail-value"><button class="detail-parent-link" data-issue-key="${escapeHtml(details.parentKey)}">${escapeHtml(details.parentKey)}${details.parentSummary ? ' - ' + escapeHtml(details.parentSummary) : ''}</button></span></div>`
+    : '';
+  const labelsHtml = (details.labels && details.labels.length)
+    ? `<div class="labels-list">${details.labels.map((label) => {
+        const hue = Math.abs(hashString(label)) % 360;
+        return `<span class="label-pill" style="--label-hue:${hue}">${escapeHtml(label)}</span>`;
+      }).join('')}</div>`
+    : '-';
+  const pointsDisplay = Number.isFinite(details.points) ? formatPoints(details.points) : '-';
+  const descriptionHtml = details.description
+    ? `<div class="detail-description">${details.description}</div>`
+    : '<span class="text-muted">No description</span>';
+
+  taskDetailContent.innerHTML = `
+    <div class="detail-summary-row">
+      <span class="detail-summary">${escapeHtml(details.summary)}</span>
+      <button class="detail-summary-edit-btn" type="button" title="Edit summary">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="14" height="14"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
+      </button>
+    </div>
+    <div class="detail-grid">
+      <div class="detail-row"><span class="detail-label">Status</span><span class="detail-value"><span class="status-pill detail-status-pill ${statusClass}">${escapeHtml(details.status)}</span></span></div>
+      <div class="detail-row"><span class="detail-label">Type</span><span class="detail-value">${escapeHtml(details.issueType)}</span></div>
+      <div class="detail-row"><span class="detail-label">Priority</span><span class="detail-value">${escapeHtml(details.priority || '-')}</span></div>
+      <div class="detail-row"><span class="detail-label">Assignee</span><span class="detail-value">${escapeHtml(details.assignee)}</span></div>
+      <div class="detail-row"><span class="detail-label">Reporter</span><span class="detail-value">${escapeHtml(details.reporter || '-')}</span></div>
+      <div class="detail-row">
+        <span class="detail-label">Story Points</span>
+        <span class="detail-value detail-points-value">
+          <span class="detail-points-display">${pointsDisplay}</span>
+          <button class="detail-points-edit-btn" type="button" title="Edit story points">
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="12" height="12"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
+          </button>
+        </span>
+      </div>
+      <div class="detail-row"><span class="detail-label">Labels</span><span class="detail-value">${labelsHtml}</span></div>
+      ${parentRow}
+      <div class="detail-row"><span class="detail-label">Created</span><span class="detail-value">${formatDetailDate(details.created)}</span></div>
+      <div class="detail-row"><span class="detail-label">Updated</span><span class="detail-value">${formatDetailDate(details.updated)}</span></div>
+    </div>
+    <div class="detail-row detail-desc-header" style="margin-top:16px">
+      <span class="detail-label">Description</span>
+      <button class="detail-desc-edit-btn" type="button" title="Edit description">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" width="12" height="12"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
+      </button>
+    </div>
+    <div class="detail-desc-container">
+      ${descriptionHtml}
+    </div>
+  `;
+};
+
+const submitSubtask = async () => {
+  if (!activeTaskDetailKey) return;
+  const summaryInput = taskDetailContent.querySelector('.subtask-summary-input');
+  const pointsInput = taskDetailContent.querySelector('.subtask-points-input');
+  const summary = summaryInput ? summaryInput.value.trim() : '';
+  if (!summary) {
+    showToast('Subtask summary is required.');
+    return;
+  }
+  const points = pointsInput && pointsInput.value.trim() !== '' ? Number(pointsInput.value) : null;
+  if (points !== null && !Number.isFinite(points)) {
+    showToast('Invalid story points value.');
+    return;
+  }
+
+  const createBtn = taskDetailContent.querySelector('.subtask-create-btn');
+  if (createBtn) {
+    createBtn.disabled = true;
+    createBtn.textContent = 'Creating...';
+  }
+
+  try {
+    const result = await window.api.createSubtask({
+      parentKey: activeTaskDetailKey,
+      summary,
+      points
+    });
+    closeTaskDetailModal();
+    showToast(`Subtask ${result.key} created.`, false);
+    loadSprintData();
+  } catch (error) {
+    showToast(error.message);
+    if (createBtn) {
+      createBtn.disabled = false;
+      createBtn.textContent = 'Create';
+    }
+  }
+};
+
+if (closeTaskDetailBtn) closeTaskDetailBtn.addEventListener('click', closeTaskDetailModal);
+if (taskDetailModal) {
+  const backdrop = taskDetailModal.querySelector('.modal-backdrop');
+  if (backdrop) backdrop.addEventListener('click', closeTaskDetailModal);
+}
+
+if (openInJiraBtn) {
+  openInJiraBtn.addEventListener('click', () => {
+    if (activeTaskDetailKey) openIssueInBrowser(activeTaskDetailKey);
+  });
+}
+
+if (deleteIssueBtn) {
+  deleteIssueBtn.addEventListener('click', () => {
+    if (!activeTaskDetailKey) return;
+    const issueKey = activeTaskDetailKey;
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-dialog-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog">
+        <p class="confirm-dialog-message">Delete <strong>${escapeHtml(issueKey)}</strong>?</p>
+        <p class="confirm-dialog-hint">This action cannot be undone.</p>
+        <div class="confirm-dialog-actions">
+          <button class="btn-secondary confirm-cancel-btn" type="button">Cancel</button>
+          <button class="btn-secondary btn-danger confirm-delete-btn" type="button">Delete</button>
+        </div>
+      </div>
+    `;
+    taskDetailModal.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.confirm-cancel-btn').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('.confirm-delete-btn').addEventListener('click', async () => {
+      const btn = overlay.querySelector('.confirm-delete-btn');
+      btn.disabled = true;
+      btn.textContent = 'Deleting...';
+      try {
+        await window.api.deleteIssue({ issueKey });
+        close();
+        closeTaskDetailModal();
+        showToast(`${issueKey} deleted.`, false);
+        loadSprintData();
+      } catch (error) {
+        showToast(error.message);
+        close();
+      }
+    });
+  });
+}
+
+if (addSubtaskBtn) {
+  addSubtaskBtn.addEventListener('click', () => {
+    if (!taskDetailContent) return;
+    // Don't add form if already present
+    if (taskDetailContent.querySelector('.subtask-form')) return;
+    const form = document.createElement('div');
+    form.className = 'subtask-form';
+    form.innerHTML = `
+      <div class="form-group">
+        <label>Subtask Summary</label>
+        <input type="text" class="subtask-summary-input" placeholder="Subtask summary">
+      </div>
+      <div class="form-group">
+        <label>Story Points (optional)</label>
+        <input type="number" class="subtask-points-input" min="0" step="0.5" placeholder="0">
+      </div>
+      <div class="subtask-form-actions">
+        <button class="btn-secondary subtask-cancel-btn" type="button">Cancel</button>
+        <button class="btn-primary subtask-create-btn" type="button">Create</button>
+      </div>
+    `;
+    taskDetailContent.appendChild(form);
+    const summaryInput = form.querySelector('.subtask-summary-input');
+    if (summaryInput) summaryInput.focus();
+
+    form.querySelector('.subtask-cancel-btn').addEventListener('click', () => form.remove());
+    form.querySelector('.subtask-create-btn').addEventListener('click', submitSubtask);
+    form.querySelectorAll('input').forEach((input) => {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); submitSubtask(); }
+      });
+    });
+  });
+}
+
+if (taskDetailContent) {
+  taskDetailContent.addEventListener('click', (event) => {
+    const target = event.target instanceof Element ? event.target : event.target.parentElement;
+    const detailStatusPill = target ? target.closest('.detail-status-pill') : null;
+    if (detailStatusPill && activeTaskDetailKey) {
+      event.preventDefault();
+      openStatusPopover(activeTaskDetailKey, detailStatusPill);
+      return;
+    }
+    const editSummaryBtn = target ? target.closest('.detail-summary-edit-btn') : null;
+    if (editSummaryBtn) {
+      event.preventDefault();
+      const row = taskDetailContent.querySelector('.detail-summary-row');
+      if (!row || row.querySelector('.detail-summary-input')) return;
+      const display = row.querySelector('.detail-summary');
+      const currentText = display ? display.textContent.trim() : '';
+      editSummaryBtn.classList.add('hidden');
+      display.classList.add('hidden');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'detail-summary-input';
+      input.value = currentText;
+      row.insertBefore(input, editSummaryBtn);
+      input.focus();
+      input.select();
+
+      const saveSummary = async () => {
+        const val = input.value.trim();
+        if (!val) { showToast('Summary cannot be empty.'); return; }
+        if (val === currentText) {
+          input.remove();
+          display.classList.remove('hidden');
+          editSummaryBtn.classList.remove('hidden');
+          return;
+        }
+        input.disabled = true;
+        try {
+          await window.api.updateIssueSummary({ issueKey: activeTaskDetailKey, summary: val });
+          display.textContent = val;
+          if (currentData?.worklogs?.[activeTaskDetailKey]) {
+            currentData.worklogs[activeTaskDetailKey].summary = val;
+            updateSummaryCell(activeTaskDetailKey);
+          }
+          showToast('Summary updated.', false);
+        } catch (err) {
+          showToast(err.message);
+        } finally {
+          input.remove();
+          display.classList.remove('hidden');
+          editSummaryBtn.classList.remove('hidden');
+        }
+      };
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); saveSummary(); }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          input.remove();
+          display.classList.remove('hidden');
+          editSummaryBtn.classList.remove('hidden');
+        }
+      });
+      input.addEventListener('blur', () => { if (input.parentElement) saveSummary(); });
+      return;
+    }
+    const editDescBtn = target ? target.closest('.detail-desc-edit-btn') : null;
+    if (editDescBtn) {
+      event.preventDefault();
+      const container = taskDetailContent.querySelector('.detail-desc-container');
+      if (!container || container.querySelector('.desc-editor')) return;
+      const descEl = container.querySelector('.detail-description');
+      const noDescEl = container.querySelector('.text-muted');
+      const currentHtml = descEl ? descEl.innerHTML : '';
+
+      // Hide original content
+      if (descEl) descEl.classList.add('hidden');
+      if (noDescEl) noDescEl.classList.add('hidden');
+      editDescBtn.classList.add('hidden');
+
+      // Create editor
+      const editor = document.createElement('div');
+      editor.className = 'desc-editor';
+      editor.innerHTML = EDITOR_TOOLBAR_HTML;
+      const editable = document.createElement('div');
+      editable.className = 'desc-editor-body detail-description';
+      editable.contentEditable = 'true';
+      editable.innerHTML = currentHtml || '<p><br></p>';
+      editor.appendChild(editable);
+      container.appendChild(editor);
+      editable.focus();
+
+      // Toolbar commands
+      editor.querySelector('.desc-editor-toolbar').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-cmd]');
+        if (btn) {
+          e.preventDefault();
+          document.execCommand(btn.dataset.cmd, false, null);
+          editable.focus();
+        }
+      });
+
+      const closeEditor = () => {
+        editor.remove();
+        if (descEl) descEl.classList.remove('hidden');
+        if (noDescEl && !descEl) noDescEl.classList.remove('hidden');
+        editDescBtn.classList.remove('hidden');
+      };
+
+      editor.querySelector('.desc-editor-cancel').addEventListener('click', (e) => {
+        e.preventDefault();
+        closeEditor();
+      });
+
+      editor.querySelector('.desc-editor-save').addEventListener('click', async (e) => {
+        e.preventDefault();
+        const saveBtn = editor.querySelector('.desc-editor-save');
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+        try {
+          const adf = htmlToAdf(editable.innerHTML);
+          await window.api.updateIssueDescription({ issueKey: activeTaskDetailKey, description: adf });
+          // Update the display
+          const newHtml = editable.innerHTML;
+          if (descEl) {
+            descEl.innerHTML = newHtml;
+          } else {
+            // Was "No description", create the element
+            if (noDescEl) noDescEl.remove();
+            const newDesc = document.createElement('div');
+            newDesc.className = 'detail-description';
+            newDesc.innerHTML = newHtml;
+            container.insertBefore(newDesc, editor);
+          }
+          editor.remove();
+          editDescBtn.classList.remove('hidden');
+          showToast('Description updated.', false);
+        } catch (err) {
+          showToast(err.message);
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save';
+        }
+      });
+      return;
+    }
+    const parentLink = target ? target.closest('.detail-parent-link') : null;
+    if (parentLink) {
+      event.preventDefault();
+      openTaskDetailModal(parentLink.dataset.issueKey);
+      return;
+    }
+    const editPointsBtn = target ? target.closest('.detail-points-edit-btn') : null;
+    if (editPointsBtn) {
+      event.preventDefault();
+      const container = taskDetailContent.querySelector('.detail-points-value');
+      if (!container || container.querySelector('.detail-points-input')) return;
+      const display = container.querySelector('.detail-points-display');
+      const currentText = display ? display.textContent.trim() : '';
+      const currentVal = currentText !== '-' ? currentText : '';
+      editPointsBtn.classList.add('hidden');
+      display.classList.add('hidden');
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'detail-points-input';
+      input.min = '0';
+      input.step = '0.5';
+      input.value = currentVal;
+      container.insertBefore(input, editPointsBtn);
+      input.focus();
+      input.select();
+
+      const savePoints = async () => {
+        const val = input.value.trim();
+        const points = val === '' ? null : Number(val);
+        if (points !== null && !Number.isFinite(points)) {
+          showToast('Invalid story points value.');
+          return;
+        }
+        input.disabled = true;
+        try {
+          await window.api.updateStoryPoints({ issueKey: activeTaskDetailKey, points });
+          if (display) display.textContent = points !== null ? formatPoints(points) : '-';
+          if (currentData?.worklogs?.[activeTaskDetailKey]) {
+            currentData.worklogs[activeTaskDetailKey].points = points;
+            updatePointsCell(activeTaskDetailKey);
+            updateFooterTotals();
+          }
+          showToast('Story points updated.', false);
+        } catch (err) {
+          showToast(err.message);
+        } finally {
+          input.remove();
+          if (display) display.classList.remove('hidden');
+          editPointsBtn.classList.remove('hidden');
+        }
+      };
+
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); savePoints(); }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          input.remove();
+          if (display) display.classList.remove('hidden');
+          editPointsBtn.classList.remove('hidden');
+        }
+      });
+      input.addEventListener('blur', () => {
+        if (input.parentElement) savePoints();
+      });
+    }
+  });
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && taskDetailModal && !taskDetailModal.classList.contains('hidden')) {
+    closeTaskDetailModal();
+  }
+});
 
 // Start
 init();

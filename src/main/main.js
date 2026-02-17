@@ -3,6 +3,10 @@ const path = require('path');
 const Store = require('electron-store');
 
 const store = new Store();
+const APP_NAME = 'Worklog';
+const APP_AUTHORS = ['David Wahl, Kogenta Ltd'];
+
+app.setName(APP_NAME);
 
 const formatJiraDateTime = (date) => {
   const pad = (value, length = 2) => String(value).padStart(length, '0');
@@ -80,6 +84,46 @@ const normalizeSiteUrl = (siteUrl) => {
   const trimmed = String(siteUrl || '').trim();
   if (!trimmed) return '';
   return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+};
+
+const escapeHtmlMain = (text) => String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const adfToHtml = (node) => {
+  if (!node) return '';
+  if (node.type === 'text') {
+    let html = escapeHtmlMain(node.text || '');
+    if (Array.isArray(node.marks)) {
+      for (const mark of node.marks) {
+        switch (mark.type) {
+          case 'strong': html = `<strong>${html}</strong>`; break;
+          case 'em': html = `<em>${html}</em>`; break;
+          case 'code': html = `<code>${html}</code>`; break;
+          case 'strike': html = `<s>${html}</s>`; break;
+          case 'underline': html = `<u>${html}</u>`; break;
+          case 'link': html = `<a href="${escapeHtmlMain(mark.attrs?.href || '#')}" target="_blank" rel="noreferrer">${html}</a>`; break;
+        }
+      }
+    }
+    return html;
+  }
+  if (node.type === 'hardBreak') return '<br>';
+  if (node.type === 'rule') return '<hr>';
+  if (node.type === 'mention') return `<strong>@${escapeHtmlMain(node.attrs?.text || '')}</strong>`;
+  if (node.type === 'emoji') return node.attrs?.shortName || '';
+
+  const children = Array.isArray(node.content) ? node.content.map(adfToHtml).join('') : '';
+  switch (node.type) {
+    case 'doc': return children;
+    case 'paragraph': return `<p>${children}</p>`;
+    case 'heading': { const lvl = Math.min(Math.max(node.attrs?.level || 3, 1), 6); return `<h${lvl}>${children}</h${lvl}>`; }
+    case 'bulletList': return `<ul>${children}</ul>`;
+    case 'orderedList': return `<ol>${children}</ol>`;
+    case 'listItem': return `<li>${children}</li>`;
+    case 'blockquote': return `<blockquote>${children}</blockquote>`;
+    case 'codeBlock': return `<pre><code>${children}</code></pre>`;
+    case 'mediaGroup': case 'mediaSingle': return '';
+    default: return children;
+  }
 };
 
 const getApiContext = () => {
@@ -194,6 +238,7 @@ function createWindow() {
     height: 900,
     minWidth: 1000,
     minHeight: 600,
+    title: APP_NAME,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0d1117',
     icon: iconPath,
@@ -208,6 +253,11 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  app.setAboutPanelOptions({
+    applicationName: APP_NAME,
+    authors: APP_AUTHORS,
+    credits: `Created by ${APP_AUTHORS.join(', ')}`
+  });
   if (process.platform === 'darwin') {
     const dockIconPath = path.join(__dirname, '../../build/icon_rounded.png');
     const dockIcon = nativeImage.createFromPath(dockIconPath);
@@ -219,7 +269,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  app.quit();
 });
 
 app.on('activate', () => {
@@ -233,10 +283,11 @@ ipcMain.handle('get-auth-status', async () => {
   const apiToken = store.get('apiToken');
   const siteUrl = getSiteUrl();
   const displayName = store.get('displayName');
-  return { 
+  return {
     isAuthenticated: !!(email && apiToken && siteUrl),
     displayName,
-    siteUrl
+    siteUrl,
+    version: app.getVersion()
   };
 });
 
@@ -398,7 +449,7 @@ ipcMain.handle('fetch-sprint-data', async () => {
   // JQL: Issues assigned to you in this sprint
   const jql = `assignee = currentUser() AND sprint = ${sprintId} ORDER BY key`;
   const storyPointsFieldId = await getStoryPointsFieldId();
-  const issueFields = ['key', 'summary', 'status', 'labels'];
+  const issueFields = ['key', 'summary', 'status', 'labels', 'issuetype', 'parent'];
   if (storyPointsFieldId) issueFields.push(storyPointsFieldId);
   
   let allIssues = [];
@@ -420,7 +471,9 @@ ipcMain.handle('fetch-sprint-data', async () => {
         status: i.fields.status?.name || '',
         statusCategory: i.fields.status?.statusCategory?.colorName || 'medium-gray',
         labels: i.fields.labels || [],
-        points: pointsValue
+        points: pointsValue,
+        isSubtask: i.fields.issuetype?.subtask || false,
+        parentKey: i.fields.parent?.key || null
       };
     }));
     const total = data.total || 0;
@@ -532,7 +585,7 @@ ipcMain.handle('fetch-sprint-issues', async () => {
       throw error;
     }
   }
-  const issueFields = ['key', 'summary', 'status', 'labels'];
+  const issueFields = ['key', 'summary', 'status', 'labels', 'issuetype', 'parent'];
   if (storyPointsFieldId) issueFields.push(storyPointsFieldId);
 
   const jql = `assignee = currentUser() AND sprint = ${sprintInfo.id} ORDER BY key`;
@@ -555,13 +608,52 @@ ipcMain.handle('fetch-sprint-issues', async () => {
         status: i.fields.status?.name || '',
         statusCategory: i.fields.status?.statusCategory?.colorName || 'medium-gray',
         labels: i.fields.labels || [],
-        points: pointsValue
+        points: pointsValue,
+        isSubtask: i.fields.issuetype?.subtask || false,
+        parentKey: i.fields.parent?.key || null
       };
     }));
     const total = data.total || 0;
     const maxResults = data.maxResults || 100;
     if (startAt + maxResults >= total) break;
     startAt += maxResults;
+  }
+
+  // Fetch subtasks of parent issues (they may not be assigned to the current user)
+  const parentIssueKeys = allIssues.filter((i) => !i.isSubtask).map((i) => i.key);
+  if (parentIssueKeys.length > 0) {
+    const existingKeys = new Set(allIssues.map((i) => i.key));
+    const subtaskJql = `parent in (${parentIssueKeys.join(',')}) ORDER BY key`;
+    let subtaskStartAt = 0;
+    while (true) {
+      const url = `${baseUrl}/rest/api/3/search/jql?jql=${encodeURIComponent(subtaskJql)}&startAt=${subtaskStartAt}&maxResults=100&fields=${issueFields.join(',')}`;
+      const data = await requestJson(fetch, url, headers);
+      data.issues.forEach((i) => {
+        if (!existingKeys.has(i.key)) {
+          existingKeys.add(i.key);
+          const rawPoints = storyPointsFieldId ? i.fields[storyPointsFieldId] : null;
+          let pointsValue = null;
+          if (rawPoints !== null && rawPoints !== undefined && rawPoints !== '') {
+            pointsValue = typeof rawPoints === 'number' ? rawPoints : Number(rawPoints);
+            if (!Number.isFinite(pointsValue)) pointsValue = null;
+          }
+          allIssues.push({
+            key: i.key,
+            summary: i.fields.summary,
+            status: i.fields.status?.name || '',
+            statusCategory: i.fields.status?.statusCategory?.colorName || 'medium-gray',
+            labels: i.fields.labels || [],
+            points: pointsValue,
+            isSubtask: i.fields.issuetype?.subtask || false,
+            parentKey: i.fields.parent?.key || null
+          });
+        }
+      });
+      const total = data.total || 0;
+      const maxResults = data.maxResults || 100;
+      if (subtaskStartAt + maxResults >= total) break;
+      subtaskStartAt += maxResults;
+    }
   }
 
   return {
@@ -764,6 +856,220 @@ ipcMain.handle('transition-issue', async (event, payload) => {
     status: issue.fields.status?.name || '',
     statusCategory: issue.fields.status?.statusCategory?.colorName || 'medium-gray'
   };
+});
+
+ipcMain.handle('delete-issue', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.issueKey) {
+    throw new Error('Invalid delete issue request');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const response = await fetch(`${baseUrl}/rest/api/3/issue/${payload.issueKey}`, {
+    method: 'DELETE',
+    headers
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to delete issue: ${response.status} - ${text}`);
+  }
+
+  return { deleted: true };
+});
+
+ipcMain.handle('update-issue-summary', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.issueKey || !payload.summary || !payload.summary.trim()) {
+    throw new Error('Issue key and summary are required');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const response = await fetch(`${baseUrl}/rest/api/3/issue/${payload.issueKey}`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { summary: payload.summary.trim() } })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to update summary: ${response.status} - ${text}`);
+  }
+
+  return { issueKey: payload.issueKey, summary: payload.summary.trim() };
+});
+
+ipcMain.handle('update-issue-description', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.issueKey || !payload.description) {
+    throw new Error('Issue key and description are required');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const response = await fetch(`${baseUrl}/rest/api/3/issue/${payload.issueKey}`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { description: payload.description } })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to update description: ${response.status} - ${text}`);
+  }
+
+  return { issueKey: payload.issueKey };
+});
+
+ipcMain.handle('fetch-issue-details', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.issueKey) {
+    throw new Error('Invalid issue details request');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const storyPointsFieldId = await getStoryPointsFieldId(fetch, baseUrl, headers);
+
+  const fields = ['summary', 'status', 'priority', 'assignee', 'reporter', 'issuetype', 'labels', 'description', 'created', 'updated', 'parent'];
+  if (storyPointsFieldId) fields.push(storyPointsFieldId);
+
+  const issue = await requestJson(
+    fetch,
+    `${baseUrl}/rest/api/3/issue/${payload.issueKey}?fields=${fields.join(',')}`,
+    headers
+  );
+
+  const f = issue.fields;
+  const rawPoints = storyPointsFieldId ? f[storyPointsFieldId] : null;
+  let pointsValue = null;
+  if (rawPoints !== null && rawPoints !== undefined && rawPoints !== '') {
+    pointsValue = typeof rawPoints === 'number' ? rawPoints : Number(rawPoints);
+    if (!Number.isFinite(pointsValue)) pointsValue = null;
+  }
+
+  return {
+    key: issue.key,
+    summary: f.summary || '',
+    status: f.status?.name || '',
+    statusCategory: f.status?.statusCategory?.colorName || 'medium-gray',
+    priority: f.priority?.name || '',
+    issueType: f.issuetype?.name || '',
+    isSubtask: f.issuetype?.subtask || false,
+    assignee: f.assignee?.displayName || 'Unassigned',
+    reporter: f.reporter?.displayName || '',
+    labels: f.labels || [],
+    points: pointsValue,
+    description: f.description ? adfToHtml(f.description) : '',
+    created: f.created || '',
+    updated: f.updated || '',
+    parentKey: f.parent?.key || null,
+    parentSummary: f.parent?.fields?.summary || ''
+  };
+});
+
+ipcMain.handle('update-story-points', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.issueKey) {
+    throw new Error('Invalid story points update request');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const storyPointsFieldId = await getStoryPointsFieldId(fetch, baseUrl, headers);
+  if (!storyPointsFieldId) {
+    throw new Error('Story points field not found in Jira');
+  }
+
+  const points = payload.points != null && Number.isFinite(Number(payload.points)) ? Number(payload.points) : null;
+  const response = await fetch(`${baseUrl}/rest/api/3/issue/${payload.issueKey}`, {
+    method: 'PUT',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: { [storyPointsFieldId]: points } })
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to update story points: ${response.status} - ${text}`);
+  }
+
+  return { issueKey: payload.issueKey, points };
+});
+
+ipcMain.handle('create-subtask', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.parentKey || !payload.summary) {
+    throw new Error('Parent key and summary are required');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const requestHeaders = { ...headers, 'Content-Type': 'application/json' };
+  const { myAccountId } = await getUserContext(fetch, baseUrl, headers);
+
+  const projectKey = payload.parentKey.split('-')[0];
+
+  // Discover subtask issue type
+  const meta = await requestJson(
+    fetch,
+    `${baseUrl}/rest/api/3/issue/createmeta/${projectKey}/issuetypes`,
+    headers
+  );
+  const subtaskType = (meta.issueTypes || meta.values || []).find((t) => t.subtask);
+  if (!subtaskType) {
+    throw new Error('No subtask issue type found for this project');
+  }
+
+  // Build issue payload
+  const issueData = {
+    fields: {
+      project: { key: projectKey },
+      parent: { key: payload.parentKey },
+      summary: payload.summary,
+      issuetype: { id: subtaskType.id },
+      assignee: { accountId: myAccountId }
+    }
+  };
+
+  const storyPointsFieldId = await getStoryPointsFieldId(fetch, baseUrl, headers);
+
+  if (storyPointsFieldId && payload.points != null && Number.isFinite(Number(payload.points))) {
+    issueData.fields[storyPointsFieldId] = Number(payload.points);
+  }
+
+  // Create the subtask
+  const response = await fetch(`${baseUrl}/rest/api/3/issue`, {
+    method: 'POST',
+    headers: requestHeaders,
+    body: JSON.stringify(issueData)
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Failed to create subtask: ${response.status} - ${text}`);
+  }
+  const created = await response.json();
+
+  // Redistribute story points (non-fatal)
+  if (storyPointsFieldId && payload.points != null && Number.isFinite(Number(payload.points))) {
+    try {
+      const parentIssue = await requestJson(
+        fetch,
+        `${baseUrl}/rest/api/3/issue/${payload.parentKey}?fields=${storyPointsFieldId}`,
+        headers
+      );
+      const parentPoints = parentIssue.fields[storyPointsFieldId];
+      if (parentPoints != null && Number.isFinite(Number(parentPoints))) {
+        const newParentPoints = Math.max(0, Number(parentPoints) - Number(payload.points));
+        await fetch(`${baseUrl}/rest/api/3/issue/${payload.parentKey}`, {
+          method: 'PUT',
+          headers: requestHeaders,
+          body: JSON.stringify({ fields: { [storyPointsFieldId]: newParentPoints } })
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to redistribute story points:', err.message);
+    }
+  }
+
+  return { key: created.key };
 });
 
 ipcMain.handle('open-external', async (event, url) => {

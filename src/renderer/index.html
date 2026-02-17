@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: https:;">
-  <title>Jira Sprint Worklog</title>
+  <title>Worklog</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -189,6 +189,35 @@
             <button id="clearWorklogBtn" class="btn-secondary">Clear</button>
             <button id="cancelWorklogBtn" class="btn-secondary">Cancel</button>
             <button id="saveWorklogBtn" class="btn-primary">Save</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Task Detail Modal -->
+      <div id="taskDetailModal" class="modal hidden">
+        <div class="modal-backdrop"></div>
+        <div class="modal-content task-detail-modal">
+          <div class="modal-header">
+            <h3 id="taskDetailTitle">Issue</h3>
+            <button id="closeTaskDetailBtn" class="icon-btn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="6" x2="6" y2="18"></line>
+                <line x1="6" y1="6" x2="18" y2="18"></line>
+              </svg>
+            </button>
+          </div>
+          <div class="modal-body">
+            <div id="taskDetailLoading" class="task-detail-loading">
+              <div class="spinner"></div>
+            </div>
+            <div id="taskDetailContent" class="task-detail-content hidden"></div>
+          </div>
+          <div class="modal-footer task-detail-footer">
+            <button id="deleteIssueBtn" class="btn-ghost-danger">Delete</button>
+            <div class="task-detail-footer-right">
+              <button id="addSubtaskBtn" class="btn-secondary hidden">Add Subtask</button>
+              <button id="openInJiraBtn" class="btn-secondary">Open in Jira</button>
+            </div>
           </div>
         </div>
       </div>

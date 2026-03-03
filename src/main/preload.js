@@ -15,7 +15,9 @@ contextBridge.exposeInMainWorld('api', {
   updateIssueDescription: (payload) => ipcRenderer.invoke('update-issue-description', payload),
   fetchIssueDetails: (payload) => ipcRenderer.invoke('fetch-issue-details', payload),
   updateStoryPoints: (payload) => ipcRenderer.invoke('update-story-points', payload),
+  convertToTask: (payload) => ipcRenderer.invoke('convert-to-task', payload),
   createSubtask: (payload) => ipcRenderer.invoke('create-subtask', payload),
+  splitTask: (payload) => ipcRenderer.invoke('split-task', payload),
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (settings) => ipcRenderer.invoke('save-settings', settings)

@@ -967,6 +967,306 @@ ipcMain.handle('fetch-issue-details', async (event, payload) => {
   };
 });
 
+ipcMain.handle('convert-to-task', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.issueKey) {
+    throw new Error('Issue key is required');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const requestHeaders = { ...headers, 'Content-Type': 'application/json' };
+  const storyPointsFieldId = await getStoryPointsFieldId(fetch, baseUrl, headers);
+
+  // Fetch the subtask with all fields we need to copy
+  const spField = storyPointsFieldId || '_none_';
+  const issue = await requestJson(
+    fetch,
+    `${baseUrl}/rest/api/3/issue/${payload.issueKey}?fields=summary,description,parent,issuetype,labels,assignee,priority,status,${spField}`,
+    headers
+  );
+  if (!issue.fields.issuetype?.subtask) {
+    throw new Error('This issue is not a subtask');
+  }
+  const parentKey = issue.fields.parent?.key;
+
+  // Fetch parent to get labels and grandparent
+  let parentLabels = [];
+  let grandparentKey = null;
+  if (parentKey) {
+    const parent = await requestJson(
+      fetch,
+      `${baseUrl}/rest/api/3/issue/${parentKey}?fields=labels,parent`,
+      headers
+    );
+    parentLabels = parent.fields.labels || [];
+    grandparentKey = parent.fields.parent?.key || null;
+  }
+
+  // Find a non-subtask issue type for the project
+  const projectKey = payload.issueKey.split('-')[0];
+  const meta = await requestJson(
+    fetch,
+    `${baseUrl}/rest/api/3/issue/createmeta/${projectKey}/issuetypes`,
+    headers
+  );
+  const types = meta.issueTypes || meta.values || [];
+  const taskType = types.find((t) => !t.subtask && /task/i.test(t.name))
+    || types.find((t) => !t.subtask && /story/i.test(t.name))
+    || types.find((t) => !t.subtask);
+  if (!taskType) {
+    throw new Error('No suitable task issue type found for this project');
+  }
+
+  // Merge labels
+  const currentLabels = issue.fields.labels || [];
+  const mergedLabels = [...new Set([...currentLabels, ...parentLabels])];
+
+  // Build new issue fields (copy from subtask)
+  const newFields = {
+    project: { key: projectKey },
+    summary: issue.fields.summary,
+    issuetype: { id: taskType.id },
+    labels: mergedLabels
+  };
+  if (issue.fields.description) {
+    newFields.description = issue.fields.description;
+  }
+  if (issue.fields.assignee?.accountId) {
+    newFields.assignee = { accountId: issue.fields.assignee.accountId };
+  }
+  if (issue.fields.priority?.id) {
+    newFields.priority = { id: issue.fields.priority.id };
+  }
+  if (grandparentKey) {
+    newFields.parent = { key: grandparentKey };
+  }
+  if (storyPointsFieldId && issue.fields[storyPointsFieldId] != null) {
+    newFields[storyPointsFieldId] = issue.fields[storyPointsFieldId];
+  }
+
+  // Create the new task
+  const createResp = await fetch(`${baseUrl}/rest/api/3/issue`, {
+    method: 'POST',
+    headers: requestHeaders,
+    body: JSON.stringify({ fields: newFields })
+  });
+  if (!createResp.ok) {
+    const text = await createResp.text();
+    throw new Error(`Failed to create new task: ${createResp.status} - ${text}`);
+  }
+  const created = await createResp.json();
+  const newKey = created.key;
+
+  // Move new task into the active sprint (non-fatal)
+  try {
+    const boardId = store.get('boardId');
+    if (boardId) {
+      const sprintInfo = await getActiveSprintInfo(fetch, baseUrl, headers, boardId);
+      await fetch(`${baseUrl}/rest/agile/1.0/sprint/${sprintInfo.id}/issue`, {
+        method: 'POST',
+        headers: requestHeaders,
+        body: JSON.stringify({ issues: [newKey] })
+      });
+    }
+  } catch (err) {
+    console.warn('Failed to move task to sprint:', err.message);
+  }
+
+  // Transition new task to match old subtask's status (non-fatal)
+  const oldStatus = issue.fields.status?.name;
+  if (oldStatus) {
+    try {
+      const transData = await requestJson(
+        fetch,
+        `${baseUrl}/rest/api/3/issue/${newKey}/transitions`,
+        headers
+      );
+      const match = (transData.transitions || []).find(
+        (t) => t.to?.name?.toLowerCase() === oldStatus.toLowerCase()
+      );
+      if (match) {
+        await fetch(`${baseUrl}/rest/api/3/issue/${newKey}/transitions`, {
+          method: 'POST',
+          headers: requestHeaders,
+          body: JSON.stringify({ transition: { id: match.id } })
+        });
+      }
+    } catch (err) {
+      console.warn('Failed to set status on new task:', err.message);
+    }
+  }
+
+  // Copy worklogs from old issue to new issue
+  const worklogsResp = await requestJson(
+    fetch,
+    `${baseUrl}/rest/api/3/issue/${payload.issueKey}/worklog`,
+    headers
+  );
+  const worklogs = worklogsResp.worklogs || [];
+  for (const wl of worklogs) {
+    const wlResp = await fetch(`${baseUrl}/rest/api/3/issue/${newKey}/worklog`, {
+      method: 'POST',
+      headers: requestHeaders,
+      body: JSON.stringify({
+        timeSpentSeconds: wl.timeSpentSeconds,
+        started: wl.started,
+        comment: wl.comment || undefined
+      })
+    });
+    if (!wlResp.ok) {
+      throw new Error(`Failed to copy worklog to ${newKey}. Old subtask ${payload.issueKey} was NOT deleted.`);
+    }
+  }
+
+  // Delete the old subtask (only reached if all worklogs copied successfully)
+  const deleteResp = await fetch(`${baseUrl}/rest/api/3/issue/${payload.issueKey}`, {
+    method: 'DELETE',
+    headers
+  });
+  if (!deleteResp.ok) {
+    const text = await deleteResp.text();
+    throw new Error(`Migrated to ${newKey} but failed to delete old subtask ${payload.issueKey}: ${deleteResp.status} - ${text}`);
+  }
+
+  return { issueKey: newKey, issueType: taskType.name };
+});
+
+ipcMain.handle('split-task', async (event, payload) => {
+  const fetch = require('node-fetch');
+
+  if (!payload || !payload.issueKey || !Array.isArray(payload.newTasks) || payload.newTasks.length === 0) {
+    throw new Error('Issue key and at least one new task are required');
+  }
+
+  const { baseUrl, headers } = getApiContext();
+  const requestHeaders = { ...headers, 'Content-Type': 'application/json' };
+  const storyPointsFieldId = await getStoryPointsFieldId(fetch, baseUrl, headers);
+
+  // Fetch original issue fields to copy
+  const spField = storyPointsFieldId || '_none_';
+  const issue = await requestJson(
+    fetch,
+    `${baseUrl}/rest/api/3/issue/${payload.issueKey}?fields=summary,description,parent,issuetype,labels,assignee,priority,status,${spField}`,
+    headers
+  );
+  const projectKey = payload.issueKey.split('-')[0];
+  const oldStatus = issue.fields.status?.name;
+
+  // Update original issue summary/points if changed
+  const updateFields = {};
+  if (payload.originalSummary != null && payload.originalSummary !== issue.fields.summary) {
+    updateFields.summary = payload.originalSummary;
+  }
+  if (storyPointsFieldId && payload.originalPoints != null) {
+    const newPts = Number(payload.originalPoints);
+    const oldPts = issue.fields[storyPointsFieldId];
+    if (Number.isFinite(newPts) && newPts !== oldPts) {
+      updateFields[storyPointsFieldId] = newPts;
+    }
+  }
+  if (Object.keys(updateFields).length > 0) {
+    const updResp = await fetch(`${baseUrl}/rest/api/3/issue/${payload.issueKey}`, {
+      method: 'PUT',
+      headers: requestHeaders,
+      body: JSON.stringify({ fields: updateFields })
+    });
+    if (!updResp.ok) {
+      const text = await updResp.text();
+      throw new Error(`Failed to update original issue: ${updResp.status} - ${text}`);
+    }
+  }
+
+  // Get active sprint
+  let sprintId = null;
+  try {
+    const boardId = store.get('boardId');
+    if (boardId) {
+      const sprintInfo = await getActiveSprintInfo(fetch, baseUrl, headers, boardId);
+      sprintId = sprintInfo.id;
+    }
+  } catch (err) {
+    console.warn('Could not get active sprint for split tasks:', err.message);
+  }
+
+  // Create each new task
+  const createdKeys = [];
+  for (const newTask of payload.newTasks) {
+    if (!newTask.summary || !newTask.summary.trim()) continue;
+
+    const newFields = {
+      project: { key: projectKey },
+      summary: newTask.summary.trim(),
+      issuetype: { id: issue.fields.issuetype.id }
+    };
+    if (issue.fields.assignee?.accountId) {
+      newFields.assignee = { accountId: issue.fields.assignee.accountId };
+    }
+    if (issue.fields.priority?.id) {
+      newFields.priority = { id: issue.fields.priority.id };
+    }
+    if (issue.fields.labels?.length) {
+      newFields.labels = issue.fields.labels;
+    }
+    if (issue.fields.parent?.key) {
+      newFields.parent = { key: issue.fields.parent.key };
+    }
+    if (storyPointsFieldId && newTask.points != null && Number.isFinite(Number(newTask.points))) {
+      newFields[storyPointsFieldId] = Number(newTask.points);
+    }
+
+    const createResp = await fetch(`${baseUrl}/rest/api/3/issue`, {
+      method: 'POST',
+      headers: requestHeaders,
+      body: JSON.stringify({ fields: newFields })
+    });
+    if (!createResp.ok) {
+      const text = await createResp.text();
+      throw new Error(`Failed to create split task: ${createResp.status} - ${text}`);
+    }
+    const created = await createResp.json();
+    createdKeys.push(created.key);
+
+    // Move to sprint (non-fatal)
+    if (sprintId) {
+      try {
+        await fetch(`${baseUrl}/rest/agile/1.0/sprint/${sprintId}/issue`, {
+          method: 'POST',
+          headers: requestHeaders,
+          body: JSON.stringify({ issues: [created.key] })
+        });
+      } catch (err) {
+        console.warn(`Failed to move ${created.key} to sprint:`, err.message);
+      }
+    }
+
+    // Transition to match original status (non-fatal)
+    if (oldStatus) {
+      try {
+        const transData = await requestJson(
+          fetch,
+          `${baseUrl}/rest/api/3/issue/${created.key}/transitions`,
+          headers
+        );
+        const match = (transData.transitions || []).find(
+          (t) => t.to?.name?.toLowerCase() === oldStatus.toLowerCase()
+        );
+        if (match) {
+          await fetch(`${baseUrl}/rest/api/3/issue/${created.key}/transitions`, {
+            method: 'POST',
+            headers: requestHeaders,
+            body: JSON.stringify({ transition: { id: match.id } })
+          });
+        }
+      } catch (err) {
+        console.warn(`Failed to transition ${created.key}:`, err.message);
+      }
+    }
+  }
+
+  return { originalKey: payload.issueKey, createdKeys };
+});
+
 ipcMain.handle('update-story-points', async (event, payload) => {
   const fetch = require('node-fetch');
 

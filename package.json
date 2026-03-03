@@ -1,6 +1,6 @@
 {
   "name": "sprint-timesheet",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Beautiful sprint timesheet viewer with Atlassian integration",
   "main": "src/main/main.js",
   "scripts": {
@@ -8,7 +8,7 @@
     "dev": "NODE_ENV=development electron .",
     "build": "electron-builder",
     "build:mac": "electron-builder -m",
-    "build:win": "electron-builder -w"
+    "build:win": "electron-builder -w --x64"
   },
   "author": "David Wahl, Kogenta Ltd",
   "license": "MIT",

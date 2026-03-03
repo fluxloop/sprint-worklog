@@ -53,6 +53,8 @@ const closeTaskDetailBtn = document.getElementById('closeTaskDetailBtn');
 const taskDetailLoading = document.getElementById('taskDetailLoading');
 const taskDetailContent = document.getElementById('taskDetailContent');
 const addSubtaskBtn = document.getElementById('addSubtaskBtn');
+const convertToTaskBtn = document.getElementById('convertToTaskBtn');
+const splitTaskBtn = document.getElementById('splitTaskBtn');
 const openInJiraBtn = document.getElementById('openInJiraBtn');
 const deleteIssueBtn = document.getElementById('deleteIssueBtn');
 
@@ -1006,6 +1008,8 @@ const openTaskDetailModal = async (issueKey) => {
   taskDetailContent.classList.add('hidden');
   taskDetailContent.innerHTML = '';
   addSubtaskBtn.classList.add('hidden');
+  convertToTaskBtn.classList.add('hidden');
+  splitTaskBtn.classList.add('hidden');
   taskDetailModal.classList.remove('hidden');
 
   try {
@@ -1014,8 +1018,11 @@ const openTaskDetailModal = async (issueKey) => {
     renderTaskDetail(details);
     taskDetailLoading.classList.add('hidden');
     taskDetailContent.classList.remove('hidden');
-    if (!details.isSubtask) {
+    if (details.isSubtask) {
+      convertToTaskBtn.classList.remove('hidden');
+    } else {
       addSubtaskBtn.classList.remove('hidden');
+      splitTaskBtn.classList.remove('hidden');
     }
   } catch (error) {
     taskDetailLoading.classList.add('hidden');
@@ -1029,6 +1036,8 @@ const closeTaskDetailModal = () => {
   if (taskDetailModal) taskDetailModal.classList.add('hidden');
   if (taskDetailContent) taskDetailContent.innerHTML = '';
   if (addSubtaskBtn) addSubtaskBtn.classList.add('hidden');
+  if (convertToTaskBtn) convertToTaskBtn.classList.add('hidden');
+  if (splitTaskBtn) splitTaskBtn.classList.add('hidden');
 };
 
 const formatDetailDate = (isoStr) => {
@@ -1142,6 +1151,8 @@ const EDITOR_TOOLBAR_HTML = `
     <button type="button" data-cmd="italic" title="Italic"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M6 2h6v2h-2.2l-2.6 8H9v2H3v-2h2.2l2.6-8H6V2z"/></svg></button>
     <button type="button" data-cmd="insertUnorderedList" title="Bullet list"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><circle cx="2" cy="4" r="1.5"/><circle cx="2" cy="8" r="1.5"/><circle cx="2" cy="12" r="1.5"/><rect x="5" y="3" width="10" height="2" rx="0.5"/><rect x="5" y="7" width="10" height="2" rx="0.5"/><rect x="5" y="11" width="10" height="2" rx="0.5"/></svg></button>
     <button type="button" data-cmd="insertOrderedList" title="Numbered list"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><text x="0" y="5.5" font-size="5" font-weight="600" font-family="sans-serif">1.</text><text x="0" y="9.5" font-size="5" font-weight="600" font-family="sans-serif">2.</text><text x="0" y="13.5" font-size="5" font-weight="600" font-family="sans-serif">3.</text><rect x="5" y="3" width="10" height="2" rx="0.5"/><rect x="5" y="7" width="10" height="2" rx="0.5"/><rect x="5" y="11" width="10" height="2" rx="0.5"/></svg></button>
+    <span class="desc-toolbar-sep"></span>
+    <button type="button" class="desc-source-toggle" title="Toggle source code">&lt;/&gt;</button>
     <span class="desc-editor-spacer"></span>
     <button type="button" class="desc-editor-cancel" title="Cancel">Cancel</button>
     <button type="button" class="desc-editor-save btn-primary btn-small" title="Save">Save</button>
@@ -1295,6 +1306,170 @@ if (deleteIssueBtn) {
   });
 }
 
+if (convertToTaskBtn) {
+  convertToTaskBtn.addEventListener('click', () => {
+    if (!activeTaskDetailKey) return;
+    const issueKey = activeTaskDetailKey;
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-dialog-overlay';
+    overlay.innerHTML = `
+      <div class="confirm-dialog">
+        <p class="confirm-dialog-message">Migrate <strong>${escapeHtml(issueKey)}</strong> to a new task?</p>
+        <p class="confirm-dialog-hint">A new task will be created with a new ID. Labels, parent reference, worklogs, and status will be carried over. The original subtask will be deleted.</p>
+        <div class="confirm-dialog-actions">
+          <button class="btn-secondary confirm-cancel-btn" type="button">Cancel</button>
+          <button class="btn-primary confirm-convert-btn" type="button">Migrate</button>
+        </div>
+      </div>
+    `;
+    taskDetailModal.appendChild(overlay);
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.confirm-cancel-btn').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('.confirm-convert-btn').addEventListener('click', async () => {
+      const btn = overlay.querySelector('.confirm-convert-btn');
+      btn.disabled = true;
+      btn.textContent = 'Migrating...';
+      try {
+        const result = await window.api.convertToTask({ issueKey });
+        close();
+        closeTaskDetailModal();
+        showToast(`${issueKey} migrated to ${result.issueType} ${result.issueKey}.`, false);
+        // Brief delay to let Jira's search index update before refreshing
+        setTimeout(() => loadSprintData(), 1500);
+      } catch (error) {
+        showToast(error.message);
+        close();
+      }
+    });
+  });
+}
+
+if (splitTaskBtn) {
+  splitTaskBtn.addEventListener('click', () => {
+    if (!activeTaskDetailKey) return;
+    const issueKey = activeTaskDetailKey;
+    const issueData = currentData.worklogs[issueKey];
+    const currentSummary = issueData ? issueData.summary : '';
+    const currentPoints = issueData && Number.isFinite(issueData.points) ? issueData.points : 0;
+
+    let rowCounter = 1;
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-dialog-overlay';
+
+    const buildRow = (label, summary, points, isOriginal) => {
+      return `
+        <div class="split-row" data-original="${isOriginal ? 'true' : 'false'}">
+          <div class="split-row-label">${label}</div>
+          <input type="text" class="split-row-summary" placeholder="Summary *" value="${escapeHtml(summary)}">
+          <input type="number" class="split-row-points" min="0" step="0.5" placeholder="0" value="${points || 0}">
+          ${!isOriginal ? '<button type="button" class="split-row-remove" title="Remove">&times;</button>' : '<div class="split-row-remove-placeholder"></div>'}
+        </div>
+      `;
+    };
+
+    overlay.innerHTML = `
+      <div class="split-dialog">
+        <div class="split-dialog-title">Split work item</div>
+        <p class="split-dialog-hint">Split this task into multiple work items. All properties except description and worklogs will be copied.</p>
+        <div class="split-table">
+          <div class="split-table-header">
+            <span>Work Item</span>
+            <span>Summary *</span>
+            <span>Estimate</span>
+            <span></span>
+          </div>
+          <div class="split-rows">
+            ${buildRow(escapeHtml(issueKey), currentSummary, currentPoints, true)}
+            ${buildRow('New work item 1', '', 0, false)}
+          </div>
+        </div>
+        <button type="button" class="split-add-btn">+ Add another</button>
+        <div class="split-dialog-actions">
+          <button class="btn-secondary split-cancel-btn" type="button">Cancel</button>
+          <button class="btn-primary split-submit-btn" type="button">Split</button>
+        </div>
+      </div>
+    `;
+    taskDetailModal.appendChild(overlay);
+
+    const rowsContainer = overlay.querySelector('.split-rows');
+
+    // Add another row
+    overlay.querySelector('.split-add-btn').addEventListener('click', () => {
+      rowCounter++;
+      const temp = document.createElement('div');
+      temp.innerHTML = buildRow(`New work item ${rowCounter}`, '', 0, false);
+      const newRow = temp.firstElementChild;
+      rowsContainer.appendChild(newRow);
+      newRow.querySelector('.split-row-summary').focus();
+    });
+
+    // Remove row (event delegation)
+    rowsContainer.addEventListener('click', (e) => {
+      const removeBtn = e.target.closest('.split-row-remove');
+      if (removeBtn) {
+        removeBtn.closest('.split-row').remove();
+      }
+    });
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.split-cancel-btn').addEventListener('click', close);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+
+    overlay.querySelector('.split-submit-btn').addEventListener('click', async () => {
+      const rows = rowsContainer.querySelectorAll('.split-row');
+      const originalRow = rowsContainer.querySelector('.split-row[data-original="true"]');
+      const originalSummary = originalRow.querySelector('.split-row-summary').value.trim();
+      const originalPoints = Number(originalRow.querySelector('.split-row-points').value) || 0;
+
+      if (!originalSummary) {
+        showToast('Original task summary is required.');
+        return;
+      }
+
+      const newTasks = [];
+      rows.forEach((row) => {
+        if (row.dataset.original === 'true') return;
+        const summary = row.querySelector('.split-row-summary').value.trim();
+        const points = Number(row.querySelector('.split-row-points').value) || 0;
+        if (summary) {
+          newTasks.push({ summary, points });
+        }
+      });
+
+      if (newTasks.length === 0) {
+        showToast('Add at least one new work item with a summary.');
+        return;
+      }
+
+      const btn = overlay.querySelector('.split-submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Splitting...';
+
+      try {
+        const result = await window.api.splitTask({
+          issueKey,
+          originalSummary,
+          originalPoints,
+          newTasks
+        });
+        close();
+        closeTaskDetailModal();
+        const created = result.createdKeys.join(', ');
+        showToast(`Split ${issueKey} into ${created}.`, false);
+        setTimeout(() => loadSprintData(), 1500);
+      } catch (error) {
+        showToast(error.message);
+        btn.disabled = false;
+        btn.textContent = 'Split';
+      }
+    });
+  });
+}
+
 if (addSubtaskBtn) {
   addSubtaskBtn.addEventListener('click', () => {
     if (!taskDetailContent) return;
@@ -1421,6 +1596,42 @@ if (taskDetailContent) {
       container.appendChild(editor);
       editable.focus();
 
+      // Source mode
+      let sourceMode = false;
+      let sourceArea = null;
+      const sourceToggle = editor.querySelector('.desc-source-toggle');
+      const formatBtns = editor.querySelectorAll('[data-cmd]');
+
+      const enterSourceMode = () => {
+        sourceMode = true;
+        sourceToggle.classList.add('is-active');
+        formatBtns.forEach((b) => b.disabled = true);
+        sourceArea = document.createElement('textarea');
+        sourceArea.className = 'desc-editor-source';
+        sourceArea.value = editable.innerHTML;
+        editable.classList.add('hidden');
+        editor.appendChild(sourceArea);
+        sourceArea.focus();
+      };
+
+      const exitSourceMode = () => {
+        sourceMode = false;
+        sourceToggle.classList.remove('is-active');
+        formatBtns.forEach((b) => b.disabled = false);
+        editable.innerHTML = sourceArea.value;
+        sourceArea.remove();
+        sourceArea = null;
+        editable.classList.remove('hidden');
+        editable.focus();
+      };
+
+      sourceToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (sourceMode) exitSourceMode(); else enterSourceMode();
+      });
+
+      const getEditorHtml = () => sourceMode ? sourceArea.value : editable.innerHTML;
+
       // Toolbar commands
       editor.querySelector('.desc-editor-toolbar').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-cmd]');
@@ -1449,10 +1660,10 @@ if (taskDetailContent) {
         saveBtn.disabled = true;
         saveBtn.textContent = 'Saving...';
         try {
-          const adf = htmlToAdf(editable.innerHTML);
+          const finalHtml = getEditorHtml();
+          const adf = htmlToAdf(finalHtml);
           await window.api.updateIssueDescription({ issueKey: activeTaskDetailKey, description: adf });
-          // Update the display
-          const newHtml = editable.innerHTML;
+          const newHtml = finalHtml;
           if (descEl) {
             descEl.innerHTML = newHtml;
           } else {
